@@ -342,7 +342,7 @@ confident answer won and the rules decided the rest.
 ### Python port (0.8, November 2026)
 
 The engine was rewritten from JavaScript to Python, and the repo now contains
-no JavaScript at all (`tests/test_no_js.py`). Behaviour didn't change. How:
+no JavaScript at all. Behaviour didn't change. How:
 
 - **Runtime:** Python >= 3.14, standard library only, no venv for users.
   3.11 was considered and rejected; the cost is that most machines must

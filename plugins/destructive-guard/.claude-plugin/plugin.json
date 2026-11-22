@@ -1,6 +1,6 @@
 {
   "name": "destructive-guard",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Jev-only PreToolUse approval gate, configured through env variables. Sends each Bash and MCP call (redacted) to the Jev classifier and asks before risky ones, and asks with a warning when Jev cannot answer; never allows or denies. Blocks .env file access. A session warning says when it is not configured or GATE_LOG cannot be written. Includes a check skill and a Lean model of the gate. Needs Python >= 3.14.",
   "author": {
     "name": "Gep"

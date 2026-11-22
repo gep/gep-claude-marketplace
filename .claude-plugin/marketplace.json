@@ -5,20 +5,20 @@
   },
   "metadata": {
     "description": "Claude Code plugins and skills maintained by Gep",
-    "version": "0.24.2"
+    "version": "0.24.3"
   },
   "plugins": [
     {
       "name": "destructive-guard",
       "source": "./plugins/destructive-guard",
       "description": "Jev-only PreToolUse approval gate, configured through env variables. Sends each Bash and MCP call (redacted) to the Jev classifier and asks before risky ones, and asks with a warning when Jev cannot answer; never allows or denies. Blocks .env file access. A session warning says when it is not configured or GATE_LOG cannot be written. Includes a check skill and a Lean model of the gate. Needs Python >= 3.14.",
-      "version": "1.0.1"
+      "version": "1.0.2"
     },
     {
       "name": "gated-dev-simple-workflow",
       "source": "./plugins/gated-dev-simple-workflow",
       "description": "Ticket-to-PR pipeline for ticket files or Jira issues: /ticket runs spec, plan, dev and review subagents in a worktree per ticket (git, Orca or iTerm2), with a plan-approval checkpoint and PR creation, then watches the PR: addresses review feedback (--address-review) and cleans up after the merge. Projects can add their own steps at fixed events (for example to sync an issue tracker). Includes a launcher that opens one session per ticket and notifies you when a launched session needs you. Treats approval-gate prompts as checkpoints; no gate required. With a Jira tracker it moves the issue To Do → In Progress → In Review → Done and posts progress comments, using the session's Jira tools. /ticket-flow runs the subtasks of one Jira parent through /ticket, picking the next ready one as slots free. Needs Python >= 3.14.",
-      "version": "0.12.1"
+      "version": "0.12.2"
     }
   ]
 }

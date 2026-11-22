@@ -359,8 +359,7 @@ JavaScript. `hooks/notify.py` starts through `hooks/run-python.sh`, which
 uses the same interpreter lookup as the gate (`GATE_INFRA_PYTHON`, then
 `python3.14`, then `python3`, always with `-I`). Unlike the gate,
 notifications are best-effort: with no suitable Python the hook stays
-silent. `jq` is no longer needed. `tests/PORTING.md` maps every old test to
-its Python replacement. An installed `destructive-guard` older than its
+silent. `jq` is no longer needed. An installed `destructive-guard` older than its
 Python version has no `lib/check.py`, so the planner writes `unknown` in
 the `Gate` column.
 
