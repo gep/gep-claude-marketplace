@@ -48,6 +48,13 @@ Claude Code version are in the table at the end of this comment.
 * A6 `systemMessage` from `PreToolUse` and `SessionStart` is shown to the user.
 * A7 One `PreToolUse` output may carry both `systemMessage` and
   `hookSpecificOutput.permissionDecision: "ask"`; both take effect (D11, D12).
+* A8 `SessionStart` cannot block or stop the session; its `systemMessage` is
+  emitted (C0, for the halt).
+* A9 `UserPromptSubmit` printing `{"decision":"block","reason":...}` rejects the
+  prompt: the model never runs and the reason is shown (C0).
+* A10 `PreToolUse` printing `permissionDecision: "deny"` with `continue: false`
+  and `stopReason`: the call does not run and Claude stops; this wins over a
+  settings `allow` rule and over `bypassPermissions` (C0).
 
 ### Evidence (L0, 2026-11-22, Claude Code 2.1.330)
 
@@ -70,6 +77,9 @@ and the call does not run; "prompted" below means exactly that.
 | A5 | verified | `--permission-mode auto`: hook silent runs; hook `ask` prompted, not run. Docs: "a PreToolUse hook's ask normally sends the tool call to the permission prompt"; exceptions for protected paths and unsandboxed retries are not modelled. |
 | A6 | partly verified | `PreToolUse` verified in stream-json (`informational`: "PreToolUse:Bash says: ..."); `SessionStart`: output reaches the harness (`hook_response` event), display in the interactive UI documented, not verified (no TTY in `-p`). |
 | A7 | verified | one output with `systemMessage` and `permissionDecision: "ask"` gave both the informational message and the prompt (default, bypass, auto, dontAsk modes). |
+| A8 | verified | C0, 2.1.330, `-p`: `SessionStart` output `{"systemMessage":"SS-MSG-A8"}` arrives as a `hook_response` event; with `continue:false`, `stopReason` and `decision:"block"` added the session still ran (assistant turn, `stop_reason: end_turn`). Display in the interactive UI is documented, not verified (no TTY). |
+| A9 | verified | C0, 2.1.330, `-p`: `{"decision":"block","reason":"UPS-REASON-A9"}` gave `informational` "UserPromptSubmit operation blocked by hook: UPS-REASON-A9" with `prompt_submit_outcome.kind: "blocked_by_hook"`, `prompt_kept: false`, `num_turns: 0`, cost 0: no assistant turn. Interactive mode not verified (no TTY). |
+| A10 | verified | C0, 2.1.330, `-p`, marker file `touch m_a10`: hook `deny` + `continue:false` + `stopReason` left no marker and no assistant turn after the call (result `stop_reason: "tool_use"`); `tool_result` "PreToolUse:Bash hook error: <reason>", `permission_decision` source `hook`. Same with an allow rule plus `--allowedTools` and with `--permission-mode bypassPermissions`. Control without hook in bypass ran the command. `stopReason` text itself is not shown in `-p` output; only the deny reason is. |
 
 Also seen: `dontAsk` with an allow rule and a hook `ask` is prompted (denied
 under `dontAsk`); not modelled.
