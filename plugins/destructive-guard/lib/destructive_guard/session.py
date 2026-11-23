@@ -7,8 +7,10 @@ Lean model (formal/SimpleGate.lean) -> code:
 | Lean                         | Here                                                          |
 | ---------------------------- | ------------------------------------------------------------- |
 | `sessionStart`               | `SessionCheck.message` (via `SessionCheck.main`)              |
-| `Setting.misconfigured w`    | `SessionCheck.issue` returns a `JevConfigError` / `ConfigError` |
-| `Setting.on`                 | `SessionCheck.issue` returns None: no output                  |
+| `issues s` (Jev `bad w`)     | `SessionCheck.issue` returns a `JevConfigError` / `ConfigError` |
+| no issue, Jev `ok`           | `SessionCheck.issue` returns None: no output                  |
+
+The model's halt (`SessionOut.halt`, `promptGate`) and Clef are not implemented yet (C4).
 
 Outside the model (notices only, they never change a decision): the removed 0.8 variables and a
 GATE_LOG path that cannot be written. They join the same message.

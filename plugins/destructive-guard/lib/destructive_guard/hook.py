@@ -13,9 +13,9 @@ Lean model (formal/SimpleGate.lean) -> code; tests/test_lean_conformance.py chec
 | `Call.badInput`, `Call.crash`         | `HookOut.fault(BAD_INPUT / INTERNAL_ERROR, ...)` in `main`     |
 | `Call.pythonMissing`                  | `hooks/gate.sh` (Python lookup fails; never reaches this file) |
 | `e.mentionsEnv`, `e.redact`           | `JevRequest.build_state` (None means `.env`)                   |
-| `q` (the Jev request)                 | `JevClient.ask_jev`                                            |
-| `judge c (q ...)`                     | `JevJudge.judge`                                               |
-| `Setting.misconfigured`               | `JevConfigError` in `main`: silent, exit 0                     |
+| `q .jev` (the Jev request)            | `JevClient.ask_jev`                                            |
+| `judge c (consult ...)`               | `JevJudge.judge` (Jev only; `consult` over Clef comes in C3)   |
+| `Setting` with `jev := .bad _`        | `JevConfigError` in `main`: silent, exit 0 (the model halts: C3) |
 | `HookOut`, `Down`                     | `outcome.HookOut`, `outcome.Down`                              |
 """
 

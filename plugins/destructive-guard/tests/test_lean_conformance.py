@@ -1,7 +1,11 @@
-"""The real gate.sh against the Lean model (formal/SimpleGate.lean): theses S1-S10 and one test per `example`.
+"""The real gate.sh against the Lean model (formal/SimpleGate.lean): theses S1-S12 and one test per `example`.
 
 `model` is the Lean `hook` in Python, per mille like the model. Every run goes through the real hook
 with `JevMock`, and each output is checked against the model and against the theses.
+
+The model is ahead of the code (C1 of the Clef plan): Clef, the fallback chain and the halt are
+modelled, not implemented. What the code cannot do yet is listed in `PENDING` (name -> work
+package); those tests check the Python model and then skip the real hook. C3/C4 empty the list.
 """
 
 import json
@@ -24,6 +28,30 @@ SECRETS = ["abc123xyz", "hunter2", "abcdefSECRET", "pw9"]
 SECRET_BASH = "curl -H 'Authorization: Bearer abcdefSECRET' https://user:pw9@host/x TOKEN=abc123xyz ls"
 SECRET_MCP = {"query": "SELECT 1", "password": "hunter2"}
 
+# Lean examples and test groups the code does not implement yet: name -> work package. A pending
+# test still checks the Python model, then skips the real hook. Remove an entry when its package lands.
+PENDING = {
+    "halt": "C3",  # matrix rows with no usable backend: deny + continue:false instead of silence
+    "clef_answers": "C3",
+    "clef_down_jev_answers": "C3",
+    "both_down_last_warning": "C3",
+    "clef_off_jev_ok": "C3",
+    "clef_bad_jev_ok": "C3",
+    "both_off_deny": "C3",
+    "clef_off_jev_no_key_deny": "C3",  # replaces misconfigured_no_key_silent (meaning changed: halt)
+    "halt_env_mention_denies": "C3",
+    "prompt_gate_block": "C4",
+    "prompt_gate_pass": "C4",
+    "session_start_halt": "C4",  # replaces session_start_misconfigured_no_key (meaning changed: halt)
+    "session_start_clef_bad": "C4",
+}
+
+
+def pending(name: str) -> None:
+    if name in PENDING:
+        pytest.skip(f"real hook: implemented in {PENDING[name]} (Lean model ahead of the code)")
+
+
 # Perm order of the model: allow < ask < deny.
 RANK = {"allow": 0, "ask": 1, "deny": 2}
 
@@ -32,26 +60,64 @@ def effective(decision: str, claude: str) -> str:
     """The model's `effective`: a hook decision on top of Claude Code's own permission."""
     if decision == "none":
         return claude
+    if decision == "deny":
+        return "deny"
     return "deny" if claude == "deny" else "ask"
 
 
 ASKS = {"timeout", "http", "network", "malformed", "badInput", "pythonMissing", "internalError"}
 
+# A setting is (clef, jev), each "off" | "bad" | "ok" (the model's `BState`); order is Clef, Jev.
+BACKENDS = ("clef", "jev")
+JEV_ONLY = ("off", "ok")  # the 1.x code: Jev alone
+JEV_NO_KEY = ("off", "bad")  # halted since the Clef model
+Result = tuple[str, object]
 
-def model(setting: str, call: str, q: tuple[str, object]) -> tuple[str, str | None]:
-    """The Lean `hook`: (decision, warning). `call` is tool | env | badInput | pythonMissing | crash."""
+
+def usable(setting: tuple[str, str]) -> list[str]:
+    return [b for b, state in zip(BACKENDS, setting, strict=True) if state == "ok"]
+
+
+def consult(q: dict[str, Result], backends: list[str]) -> Result:
+    """The Lean `consult`: the first answer, else the last backend's `down`."""
+    result: Result = ("down", "noClassifier")
+    for b in backends:
+        result = q[b]
+        if result[0] == "answer":
+            return result
+    return result
+
+
+def model(setting: tuple[str, str], call: str, q: Result | dict[str, Result]) -> tuple[str, str | None]:
+    """The Lean `hook`: (decision, warning). `call` is tool | env | badInput | pythonMissing | crash.
+
+    `q` is one result for every backend, or {"clef": ..., "jev": ...}."""
     if call in ("badInput", "pythonMissing"):
         return "ask", call
     if call == "crash":
         return "ask", "internalError"
-    if setting == "misconfigured":
-        return "none", None
+    backends = usable(setting)
+    if not backends:
+        return "deny", "noClassifier"
     if call == "env":
         return "none", "envReference"
-    kind, value = q
+    qs = q if isinstance(q, dict) else dict.fromkeys(BACKENDS, q)
+    kind, value = consult(qs, backends)
     if kind == "down":
-        return "ask", str(value)
-    return ("ask", None) if int(value) > ESCALATE else ("none", None)  # type: ignore[arg-type]
+        return ("ask", str(value)) if value in ASKS else ("none", str(value))
+    return ("ask", None) if int(value) > ESCALATE else ("none", None)  # type: ignore[call-overload]
+
+
+def session_model(setting: tuple[str, str]) -> tuple[list[str], bool] | None:
+    """The Lean `sessionStart`: (misconfigured backends, halt), or None when silent."""
+    bad = [b for b, state in zip(BACKENDS, setting, strict=True) if state == "bad"]
+    halt = not usable(setting)
+    return None if not bad and not halt else (bad, halt)
+
+
+def prompt_gate_model(setting: tuple[str, str]) -> bool:
+    """The Lean `promptGate`: True blocks the prompt."""
+    return not usable(setting)
 
 
 WARNING_TEXT = [
@@ -75,7 +141,9 @@ class Out:
 
 
 def read(stdout: str) -> Out:
-    """Parses one raw stdout and checks S1 and the raw-stdout scan on the way."""
+    """Parses one raw stdout and checks S1 and the raw-stdout scan on the way.
+
+    Only for unhalted runs: the halt's `deny` + `continue: false` (S1, S12) is read in C3."""
     if stdout == "":
         return Out(stdout, "none", None, None)
     # S5/S1: the raw bytes never contain a way to allow, deny or stop anything.
@@ -125,7 +193,8 @@ def hook(jev):
     def run(setting, stdin, answer=None, env=None):
         if answer is not None:
             jev.answer(**answer)
-        base = {"GATE_JEV_PROMPT": "cloud-change", "GATE_JEV_TIMEOUT_MS": "300"}
+        # Jev alone (`JEV_ONLY`): Clef is switched off so these runs keep meaning the same after C3.
+        base = {"GATE_JEV_PROMPT": "cloud-change", "GATE_JEV_TIMEOUT_MS": "300", "GATE_CLEF_ENABLED": "0"}
         if setting == "on":
             base |= {"TYPESAFE_API_KEY": "test-key", "GATE_JEV_URL": jev.url}
         elif setting == "noKey":
@@ -133,6 +202,39 @@ def hook(jev):
         elif setting == "badUrl":
             base |= {"TYPESAFE_API_KEY": "test-key", "GATE_JEV_URL": "http://example.com"}
         r = HookRunner.run(stdin, base, env or {})
+        assert r.status == 0
+        return read(r.stdout)
+
+    return run
+
+
+@pytest.fixture
+def clef():
+    """A second mock standing in for Clef (same request and answer shape as Jev)."""
+    with JevMock() as mock:
+        yield mock
+
+
+@pytest.fixture
+def chain(jev, clef):
+    """run(setting, stdin, clef_case, jev_case) -> Out, both backends configured per `setting`."""
+
+    def run(setting, stdin, clef_case, jev_case):
+        (clef_answer, clef_extra, _), (jev_answer, jev_extra, _) = JEV[clef_case], JEV[jev_case]
+        clef.answer(**clef_answer)
+        jev.answer(**jev_answer)
+        env = {"GATE_JEV_PROMPT": "cloud-change", "GATE_JEV_TIMEOUT_MS": "300", "GATE_CLEF_TIMEOUT_MS": "300"}
+        env |= {
+            "off": {"GATE_CLEF_ENABLED": "0"},
+            "bad": {"GATE_CLEF_URL": "http://example.com"},
+            "ok": {"GATE_CLEF_URL": clef.url} | {k.replace("JEV", "CLEF"): v for k, v in clef_extra.items()},
+        }[setting[0]]
+        env |= {
+            "off": {"GATE_JEV_ENABLED": "0"},
+            "bad": {"GATE_JEV_URL": jev.url},
+            "ok": {"TYPESAFE_API_KEY": "test-key", "GATE_JEV_URL": jev.url} | jev_extra,
+        }[setting[1]]
+        r = HookRunner.run(stdin, env)
         assert r.status == 0
         return read(r.stdout)
 
@@ -174,8 +276,11 @@ def bodies_are_clean(jev) -> None:
 @pytest.mark.parametrize("tool", list(TOOLS))
 def test_gated_calls(hook, jev, setting, jev_case, tool):
     answer, extra, q = JEV[jev_case]
+    expected = model(JEV_ONLY if setting == "on" else JEV_NO_KEY, "tool", q)
+    if setting != "on":
+        assert expected == ("deny", "noClassifier")  # S12: no usable backend halts
+        pending("halt")
     out = hook(setting, TOOLS[tool], answer, extra if setting == "on" else {})
-    expected = model("on" if setting == "on" else "misconfigured", "tool", q)
     check_theses(out, expected, sent=setting == "on", answered=q[0] == "answer")
     if setting == "on":
         bodies_are_clean(jev)
@@ -186,16 +291,19 @@ def test_gated_calls(hook, jev, setting, jev_case, tool):
         if q == ("answer", 600):
             assert out.reason.startswith("jev: ")
     else:
-        # S9: a misconfigured setting is silent per call and sends nothing.
-        assert out.stdout == ""
+        # S12, S7: halted, the call is denied and nothing is sent.
         assert jev.hits == 0
 
 
 @pytest.mark.parametrize("setting", ["on", "noKey", "badUrl"])
 @pytest.mark.parametrize("call", list(ENV_CALLS))
 def test_env_calls_are_never_sent(hook, jev, setting, call):
+    expected = model(JEV_ONLY if setting == "on" else JEV_NO_KEY, "env", ("answer", 600))
+    if setting != "on":
+        assert expected == ("deny", "noClassifier")  # S12: the halt comes before the .env skip
+        pending("halt")
     out = hook(setting, ENV_CALLS[call], JEV["risk-gt-escalate"][0])
-    check_theses(out, model("on" if setting == "on" else "misconfigured", "env", ("answer", 600)), False, False)
+    check_theses(out, expected, False, False)
     assert jev.hits == 0
     if setting == "on":
         assert out.decision == "none" and out.warning == "envReference"
@@ -212,7 +320,7 @@ def test_non_gated_tool_needs_nothing(hook, jev, setting):
 @pytest.mark.parametrize("stdin", ["not json", "", "[1]"])
 def test_bad_stdin_asks_whatever_the_setting(hook, jev, setting, stdin):
     out = hook(setting, stdin, JEV["risk-0"][0])
-    check_theses(out, model("on" if setting == "on" else "misconfigured", "badInput", ("answer", 0)), False, False)
+    check_theses(out, model(JEV_ONLY if setting == "on" else JEV_NO_KEY, "badInput", ("answer", 0)), False, False)
     assert out.reason == "plugin-fault: bad hook input"
     assert jev.hits == 0
 
@@ -220,7 +328,7 @@ def test_bad_stdin_asks_whatever_the_setting(hook, jev, setting, stdin):
 @pytest.mark.parametrize("setting", ["on", "noKey"])
 def test_no_python_asks_whatever_the_setting(hook, setting):
     out = hook(setting, TOOLS["bash"], None, {"GATE_INFRA_PYTHON": "/nonexistent"})
-    check_theses(out, model("on", "pythonMissing", ("answer", 0)), False, False)
+    check_theses(out, model(JEV_ONLY, "pythonMissing", ("answer", 0)), False, False)
     assert out.reason == "plugin-fault: no Python >= 3.14 found (set GATE_INFRA_PYTHON)"
 
 
@@ -236,7 +344,7 @@ def test_engine_exit_1_with_partial_stdout_asks_and_drops_the_partial(hook, tmp_
     fake.write_text("#!/bin/sh\nprintf '{\"hookSpecificOutput\":{\"permissionDecision\":\"all'\nexit 1\n")
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     out = hook(setting, TOOLS["bash"], None, {"GATE_INFRA_PYTHON": str(fake)})
-    check_theses(out, model("on", "crash", ("answer", 0)), False, False)
+    check_theses(out, model(JEV_ONLY, "crash", ("answer", 0)), False, False)
     assert out.reason == "plugin-fault: internal error: engine exit 1"
     assert "allow" not in out.stdout
 
@@ -253,7 +361,7 @@ def test_engine_exception_asks(hook, tmp_path, setting):
     fake.write_text(f"#!/bin/sh\nexec {sys.executable} -I -c \"$CODE\"\n")
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     out = hook(setting, TOOLS["bash"], None, {"GATE_INFRA_PYTHON": str(fake), "CODE": code})
-    check_theses(out, model("on", "crash", ("answer", 0)), False, False)
+    check_theses(out, model(JEV_ONLY, "crash", ("answer", 0)), False, False)
     assert out.reason == "plugin-fault: internal error: RuntimeError"
 
 
@@ -264,37 +372,68 @@ def test_s6_lowering_the_threshold_never_removes_an_ask(hook):
         assert hook("on", TOOLS["bash"], answer, {"GATE_JEV_ESCALATE_THRESHOLD": threshold}).decision == ("none" if threshold == "0.4" else "ask")
 
 
+STATES = ("off", "bad", "ok")
+RESULTS: list[Result] = [("answer", 0), ("answer", 500), ("answer", 501), *[("down", d) for d in ("timeout", "http", "network", "malformed")]]
+
+
 def test_model_matches_its_own_matrix_exhaustively():
-    """The Python model is total over the Lean types and obeys S2 (the only ways to a prompt)."""
-    for setting, call, q in product(
-        ["on", "misconfigured"],
-        ["tool", "env", "badInput", "pythonMissing", "crash"],
-        [("answer", 0), ("answer", 500), ("answer", 501), *[("down", d) for d in ("timeout", "http", "network", "malformed")]],
+    """The Python model is total over the Lean types and obeys S1, S2, S11 and S12."""
+    for setting, call, q_clef, q_jev in product(
+        product(STATES, STATES), ["tool", "env", "badInput", "pythonMissing", "crash"], RESULTS, RESULTS
     ):
-        decision, _ = model(setting, call, q)
-        by_s2 = (
-            call in ("badInput", "pythonMissing", "crash")
-            or (call == "tool" and setting == "on" and (q[0] == "down" or int(q[1]) > ESCALATE))  # type: ignore[arg-type]
+        q = {"clef": q_clef, "jev": q_jev}
+        decision, warning = model(setting, call, q)
+        backends = usable(setting)
+        sent = call == "tool" and bool(backends)
+        chained = consult(q, backends)
+        # S1: never allow; deny iff a tool call (Bash/MCP, .env or not) with no usable backend.
+        assert decision != "allow"
+        assert (decision == "deny") == (call in ("tool", "env") and not backends)
+        # S2: the only ways to a prompt.
+        by_s2 = call in ("badInput", "pythonMissing", "crash") or (
+            sent and (chained[0] == "down" or int(chained[1]) > ESCALATE)  # type: ignore[call-overload]
         )
         assert (decision == "ask") == by_s2
+        # S11: Clef first when usable; Clef down falls back to Jev; an unusable Clef is skipped.
+        if sent:
+            if setting[0] == "ok" and q_clef[0] == "answer":
+                assert chained == q_clef
+            elif setting[1] == "ok":
+                assert chained == q_jev
+            else:
+                assert chained == q_clef
+        # S12: halt iff no usable backend, the same for session start, prompt gate and hook.
+        halted = not backends
+        assert prompt_gate_model(setting) == halted
+        session = session_model(setting)
+        assert (session is not None and session[1]) == halted
+        if halted and call in ("tool", "env"):
+            assert (decision, warning) == ("deny", "noClassifier")
 
 
 # One test per `example` of SimpleGate.lean (same names); the model is checked, and where the hook can
-# be driven the real hook too.
+# be driven the real hook too. `setting` is (clef, jev); `q` is one result for both or a dict.
 EXAMPLES = {
-    "answer_0": ("on", "tool", ("answer", 0), ("none", None)),
-    "answer_500": ("on", "tool", ("answer", 500), ("none", None)),
-    "answer_501": ("on", "tool", ("answer", 501), ("ask", None)),
-    "down_timeout": ("on", "tool", ("down", "timeout"), ("ask", "timeout")),
-    "down_http": ("on", "tool", ("down", "http"), ("ask", "http")),
-    "down_network": ("on", "tool", ("down", "network"), ("ask", "network")),
-    "down_malformed": ("on", "tool", ("down", "malformed"), ("ask", "malformed")),
-    "misconfigured_no_key_silent": ("misconfigured", "tool", ("answer", 900), ("none", None)),
-    "env_mention_not_sent": ("on", "env", ("answer", 900), ("none", "envReference")),
-    "bad_input_on": ("on", "badInput", ("answer", 0), ("ask", "badInput")),
-    "bad_input_misconfigured": ("misconfigured", "badInput", ("answer", 0), ("ask", "badInput")),
-    "python_missing": ("on", "pythonMissing", ("answer", 0), ("ask", "pythonMissing")),
-    "crash": ("on", "crash", ("answer", 0), ("ask", "internalError")),
+    "answer_0": (JEV_ONLY, "tool", ("answer", 0), ("none", None)),
+    "answer_500": (JEV_ONLY, "tool", ("answer", 500), ("none", None)),
+    "answer_501": (JEV_ONLY, "tool", ("answer", 501), ("ask", None)),
+    "down_timeout": (JEV_ONLY, "tool", ("down", "timeout"), ("ask", "timeout")),
+    "down_http": (JEV_ONLY, "tool", ("down", "http"), ("ask", "http")),
+    "down_network": (JEV_ONLY, "tool", ("down", "network"), ("ask", "network")),
+    "down_malformed": (JEV_ONLY, "tool", ("down", "malformed"), ("ask", "malformed")),
+    "clef_answers": (("ok", "ok"), "tool", {"clef": ("answer", 900), "jev": ("answer", 0)}, ("ask", None)),
+    "clef_down_jev_answers": (("ok", "ok"), "tool", {"clef": ("down", "network"), "jev": ("answer", 900)}, ("ask", None)),
+    "both_down_last_warning": (("ok", "ok"), "tool", {"clef": ("down", "network"), "jev": ("down", "timeout")}, ("ask", "timeout")),
+    "clef_off_jev_ok": (("off", "ok"), "tool", {"clef": ("answer", 900), "jev": ("answer", 0)}, ("none", None)),
+    "clef_bad_jev_ok": (("bad", "ok"), "tool", {"clef": ("answer", 900), "jev": ("answer", 0)}, ("none", None)),
+    "both_off_deny": (("off", "off"), "tool", ("answer", 0), ("deny", "noClassifier")),
+    "clef_off_jev_no_key_deny": (JEV_NO_KEY, "tool", ("answer", 0), ("deny", "noClassifier")),
+    "halt_env_mention_denies": (("off", "off"), "env", ("answer", 0), ("deny", "noClassifier")),
+    "env_mention_not_sent": (JEV_ONLY, "env", ("answer", 900), ("none", "envReference")),
+    "bad_input_on": (JEV_ONLY, "badInput", ("answer", 0), ("ask", "badInput")),
+    "bad_input_misconfigured": (JEV_NO_KEY, "badInput", ("answer", 0), ("ask", "badInput")),
+    "python_missing": (JEV_ONLY, "pythonMissing", ("answer", 0), ("ask", "pythonMissing")),
+    "crash": (JEV_ONLY, "crash", ("answer", 0), ("ask", "internalError")),
 }
 LIVE_CASE = {
     "answer_0": ("on", "bash", "risk-0"),
@@ -304,18 +443,34 @@ LIVE_CASE = {
     "down_http": ("on", "bash", "http500"),
     "down_network": ("on", "bash", "network"),
     "down_malformed": ("on", "bash", "malformed"),
-    "misconfigured_no_key_silent": ("noKey", "bash", "risk-gt-escalate"),
+}
+# Driven through both mocks: name -> (stdin, clef case, jev case); the setting comes from EXAMPLES.
+CHAIN_CASE = {
+    "clef_answers": (TOOLS["bash"], "risk-gt-escalate", "risk-0"),
+    "clef_down_jev_answers": (TOOLS["bash"], "network", "risk-gt-escalate"),
+    "both_down_last_warning": (TOOLS["bash"], "network", "timeout"),
+    "clef_off_jev_ok": (TOOLS["bash"], "risk-gt-escalate", "risk-0"),
+    "clef_bad_jev_ok": (TOOLS["bash"], "risk-gt-escalate", "risk-0"),
+    "both_off_deny": (TOOLS["bash"], "risk-0", "risk-0"),
+    "clef_off_jev_no_key_deny": (TOOLS["bash"], "risk-0", "risk-0"),
+    "halt_env_mention_denies": (ENV_CALLS["bash-env"], "risk-0", "risk-0"),
 }
 
 
 @pytest.mark.parametrize("name", list(EXAMPLES))
-def test_example(name, hook):
+def test_example(name, request):
     setting, call, q, expected = EXAMPLES[name]
     assert model(setting, call, q) == expected
+    pending(name)
+    hook = request.getfixturevalue("hook")
     if name in LIVE_CASE:
         s, tool, jev_case = LIVE_CASE[name]
         answer, extra, _ = JEV[jev_case]
         out = hook(s, TOOLS[tool], answer, extra)
+        assert (out.decision, out.warning) == expected
+    elif name in CHAIN_CASE:
+        stdin, clef_case, jev_case = CHAIN_CASE[name]
+        out = request.getfixturevalue("chain")(setting, stdin, clef_case, jev_case)
         assert (out.decision, out.warning) == expected
     elif name == "env_mention_not_sent":
         out = hook("on", ENV_CALLS["bash-env"], JEV["risk-gt-escalate"][0])
@@ -325,21 +480,47 @@ def test_example(name, hook):
         assert (out.decision, out.warning) == expected
 
 
-def test_example_session_start_misconfigured_no_key():
-    r = HookRunner.run_session()
-    assert "TYPESAFE_API_KEY is not set" in json.loads(r.stdout)["systemMessage"]
+def test_example_session_start_halt():
+    assert session_model(JEV_NO_KEY) == (["jev"], True)
+    pending("session_start_halt")
+    message = json.loads(HookRunner.run_session({"GATE_CLEF_ENABLED": "0"}).stdout)["systemMessage"]
+    assert "TYPESAFE_API_KEY is not set" in message
+    assert "this session is halted" in message
+
+
+def test_example_session_start_clef_bad():
+    assert session_model(("bad", "ok")) == (["clef"], False)
+    pending("session_start_clef_bad")
+    r = HookRunner.run_session({"GATE_CLEF_URL": "http://example.com", "TYPESAFE_API_KEY": "k"})
+    message = json.loads(r.stdout)["systemMessage"]
+    assert "GATE_CLEF_URL" in message
+    assert "halted" not in message
 
 
 def test_example_session_start_on():
-    assert HookRunner.run_session({"TYPESAFE_API_KEY": "k"}).stdout == ""
+    assert session_model(JEV_ONLY) is None
+    assert HookRunner.run_session({"TYPESAFE_API_KEY": "k", "GATE_CLEF_ENABLED": "0"}).stdout == ""
 
 
-EFFECTIVE_IDS = ["effective_ask_allow", "effective_ask_deny", "effective_none_allow"]
+def test_example_prompt_gate_block():
+    assert prompt_gate_model(JEV_NO_KEY) is True
+    pending("prompt_gate_block")
+    r = HookRunner.run_prompt({"GATE_CLEF_ENABLED": "0"})  # C4 adds the UserPromptSubmit runner
+    assert json.loads(r.stdout)["decision"] == "block"
+
+
+def test_example_prompt_gate_pass():
+    assert prompt_gate_model(("ok", "ok")) is False
+    pending("prompt_gate_pass")
+    assert HookRunner.run_prompt({"TYPESAFE_API_KEY": "k"}).stdout == ""
+
+
+EFFECTIVE_IDS = ["effective_ask_allow", "effective_ask_deny", "effective_none_allow", "effective_deny_allow"]
 
 
 @pytest.mark.parametrize(
     ("decision", "claude", "expected"),
-    [("ask", "allow", "ask"), ("ask", "deny", "deny"), ("none", "allow", "allow")],
+    [("ask", "allow", "ask"), ("ask", "deny", "deny"), ("none", "allow", "allow"), ("deny", "allow", "deny")],
     ids=EFFECTIVE_IDS,
 )
 def test_example_effective(decision, claude, expected):
