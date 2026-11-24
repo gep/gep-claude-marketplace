@@ -34,7 +34,7 @@ class FlowCli:
 
     COMMANDS = ("status", "launch", "skip", "retry", "wait")
     DEFAULTS: ClassVar[dict[str, float]] = {"max": 1, "pollSeconds": 60, "staleHours": 3, "lostWatchMinutes": 10}
-    """Used when `.claude/gated-dev.json` has no `flow` section (or no such key)."""
+    """Used when the config file has no `flow` section (or no such key)."""
     LIMITS: ClassVar[dict[str, tuple[float, float]]] = {"max": (1, 10), "pollSeconds": (15, 3600)}
     VALUE_OPTIONS: ClassVar[dict[str, str]] = {
         "--parent": "parent",
@@ -170,7 +170,7 @@ class FlowCli:
         self.out(json.dumps(payload))
 
     def _settings(self, config: Mapping, opts: Mapping) -> dict:
-        """Flow settings: `.claude/gated-dev.json` `flow` section over DEFAULTS, then the flags."""
+        """Flow settings: the config file's `flow` section over DEFAULTS, then the flags."""
         section = config.get("flow") if isinstance(config.get("flow"), Mapping) else {}
         merged = {name: section.get(name, default) for name, default in self.DEFAULTS.items()}
         merged.update({name: opts[name] for name in self.DEFAULTS if name in opts})
@@ -197,7 +197,11 @@ class FlowCli:
         cwd = opts.get("cwd") or os.getcwd()
         root = TicketProject.find_root(cwd=cwd, run=self.run)
         project = TicketProject(root, self.run)
+        notice = None if opts.get("dryRun") else project.ensure_config()
         config = project.read_config()
+        for line in (notice, project.config_notice):
+            if line:
+                self.err(line)
         TicketProject.check_key(opts["parent"], config)
         settings = self._settings(config, opts)
         state = FlowState(

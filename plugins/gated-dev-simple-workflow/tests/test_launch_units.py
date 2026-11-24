@@ -17,10 +17,10 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def project(tmp_path, *, config=None, tickets=None):
-    """The JS fixture `repo({config, tickets})` without git: .claude/gated-dev.json and ticket files."""
+    """The JS fixture `repo({config, tickets})` without git: .claude/gated-dev-simple-workflow/config.json and ticket files."""
     if config is not None:
-        (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
-        (tmp_path / ".claude" / "gated-dev.json").write_text(config if isinstance(config, str) else json.dumps(config))
+        (tmp_path / ".claude" / "gated-dev-simple-workflow").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".claude" / "gated-dev-simple-workflow" / "config.json").write_text(config if isinstance(config, str) else json.dumps(config))
     for key, text in (tickets or {}).items():
         (tmp_path / "docs" / "tickets" / key).mkdir(parents=True, exist_ok=True)
         (tmp_path / "docs" / "tickets" / key / "ticket.md").write_text(text)
@@ -228,6 +228,40 @@ def test_read_config_defaults_overrides_and_invalid_content(tmp_path):
 
 
 MODE_DEFAULTS = {"heavy": {"session": "opus"}, "medium": {"session": "sonnet"}, "light": {"session": "sonnet"}}
+
+
+def test_read_config_location_new_path_legacy_fallback_and_precedence(tmp_path):
+    def legacy(root, config):
+        (root / ".claude").mkdir(parents=True, exist_ok=True)
+        (root / ".claude" / "gated-dev.json").write_text(json.dumps(config))
+        return root
+
+    fresh = TicketProject(project(tmp_path / "new", config={"ticketsDir": "t"}))
+    assert (fresh.read_config()["ticketsDir"], fresh.config_notice) == ("t", None)
+    assert fresh.config_file()[0] == tmp_path / "new" / ".claude" / "gated-dev-simple-workflow" / "config.json"
+
+    old = TicketProject(legacy(tmp_path / "old", {"ticketsDir": "o"}))
+    assert old.read_config()["ticketsDir"] == "o"
+    assert re.search(r"gated-dev\.json is deprecated: it is moved to .*gated-dev-simple-workflow/config\.json", old.config_notice)
+
+    both = TicketProject(legacy(project(tmp_path / "both", config={"ticketsDir": "n"}), {"ticketsDir": "o"}))
+    assert both.read_config()["ticketsDir"] == "n"
+    assert re.search(r"gated-dev\.json is ignored", both.config_notice)
+
+    none = TicketProject(project(tmp_path / "none"))
+    assert (none.read_config()["ticketsDir"], none.config_notice) == ("docs/tickets", None)
+
+
+def test_config_template_lists_every_key_with_the_defaults(tmp_path):
+    template = json.loads(TicketProject.CONFIG_TEMPLATE.read_text())
+    assert set(template) == TicketProject.CONFIG_KEYS
+    assert TicketProject(project(tmp_path / "t", config=template)).read_config() == TicketProject(project(tmp_path / "e", config={})).read_config()
+    assert template["models"] == TicketProject.MODEL_DEFAULTS
+    assert template["modes"] == TicketProject.MODE_DEFAULTS
+    skill = (Path(__file__).parents[1] / "skills" / "ticket" / "SKILL.md").read_text()
+    [line] = [x for x in skill.splitlines() if "Default `riskPaths`:" in x]
+    listed = line.split("Default `riskPaths`:")[1].split(". Any output")[0]
+    assert template["riskPaths"] == re.findall(r"`([^`]+)`", listed)
 
 
 def test_read_config_mode_defaults_and_overrides(tmp_path):

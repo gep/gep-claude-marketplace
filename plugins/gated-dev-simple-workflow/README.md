@@ -116,7 +116,7 @@ sequenceDiagram
 
 ### With a Jira tracker
 
-When `tracker` is set in `.claude/gated-dev.json`, the orchestrator (never the
+When `tracker` is set in `.claude/gated-dev-simple-workflow/config.json`, the orchestrator (never the
 stage agents) uses the session's own Jira tools: it fetches the issue into
 `ticket.md` at kickoff and moves it forward at fixed events.
 
@@ -197,7 +197,7 @@ worktree adopts it.
 
 `/ticket-flow` works through the subtasks of one Jira parent (an epic, or a
 story with subtasks) without you choosing each next ticket. It needs a Jira
-[tracker](#jira) in `.claude/gated-dev.json` and stops with a message without
+[tracker](#jira) in `.claude/gated-dev-simple-workflow/config.json` and stops with a message without
 one.
 
 ```text
@@ -233,7 +233,7 @@ one.
   `/ticket-flow PROJ-100` again continues from the saved state; it does not
   start over.
 - **One driver per parent.** Run one driver session for each parent.
-- **Settings.** The `flow` key in `.claude/gated-dev.json` (`max`, `jql`,
+- **Settings.** The `flow` key in `.claude/gated-dev-simple-workflow/config.json` (`max`, `jql`,
   `pickRules`, `pollSeconds`, `staleHours`, `lostWatchMinutes`, `remoteControl`):
   see `skills/ticket/references/config.md`.
 - **State.** `$(git rev-parse --git-common-dir)/gated-dev/flow/<PARENT>.json`,
@@ -320,7 +320,15 @@ decisions, warnings, the PR URL, the time of the last PR feedback handled
 
 ## Configuration
 
-Optional, per project, in `.claude/gated-dev.json`. Every key is optional; an
+Optional, per clone, in `.claude/gated-dev-simple-workflow/config.json` of the
+main checkout. The file is local and git-ignored: the first run of
+`/ticket`, the launcher or `/ticket-flow` adds
+`/.claude/gated-dev-simple-workflow/` to `.git/info/exclude` and creates the
+file, moving an old `.claude/gated-dev.json` there or copying the template
+[`templates/config.json`](templates/config.json), which lists every key with
+its default (commit the deletion of the old file afterwards). A key set to
+`null` means the default. Sessions in worktrees, the launcher and
+`/ticket-flow` all read the main checkout's copy. Every key is optional; an
 invalid file or an unknown key stops the run with a message. Example:
 
 ```json
@@ -390,7 +398,7 @@ with rights to read issues, list and apply transitions, comment and assign
 (and to read the current user). No API tokens and no client of its own.
 Without these tools, kickoff stops before creating anything.
 
-Minimal config in `.claude/gated-dev.json`:
+Minimal config in `.claude/gated-dev-simple-workflow/config.json`:
 
 ```json
 { "tracker": { "type": "jira", "site": "acme.example.net" } }
@@ -499,7 +507,7 @@ treated as a checkpoint, never worked around.
 The planner lists the calls its steps need that it judges likely to need
 approval in the plan's `## Gated operations` table (columns `Command`, `Gate`,
 `Reason`); you see that table at plan approval. `Gate` is `unknown` by
-default. With `"dryRunGate": true` in `.claude/gated-dev.json` and
+default. With `"dryRunGate": true` in `.claude/gated-dev-simple-workflow/config.json` and
 `destructive-guard` installed and enabled, the planner dry-runs each listed
 call through `destructive-guard:check` and writes the answer, for example
 `ask (risk 0.86)`. Each check is one request to the gate's risk classifier
@@ -526,7 +534,7 @@ Decisions made with the user while porting it:
 - **Files by default, Jira optional.** The ticket is
   `<ticketsDir>/<KEY>/ticket.md`, and the key is free-form. The first port
   ruled out any tracker (2026-11-19). That was reversed on 2026-11-21: with
-  `tracker` in `.claude/gated-dev.json`, the orchestrator fetches the issue
+  `tracker` in `.claude/gated-dev-simple-workflow/config.json`, the orchestrator fetches the issue
   into `ticket.md` and moves it through its statuses using the session's own
   Jira tools. The stage agents stay tracker-free either way. Other tracker
   steps go into `orchestratorRules` (one section per pipeline event).
@@ -552,9 +560,10 @@ through to merge and cleanup. Findings worth knowing:
 - The plugin cache is a copy. After changing the plugin, run
   `claude plugin update gated-dev-simple-workflow@gep-claude-marketplace` in
   the project before the next run.
-- The launcher reads `.claude/gated-dev.json` from the main checkout, while
-  a session in a worktree reads the base branch's copy. They can differ, and
-  the session reports it.
+- The launcher read `.claude/gated-dev.json` from the main checkout, while
+  a session in a worktree read the base branch's copy, so they could differ.
+  Since 0.16 the config is a local file that everything reads from the main
+  checkout.
 - A `Bash(git push:*)` deny in Claude Code settings doesn't match
   `git -C <worktree> push`.
 - The watcher exits `0` for feedback, merged or closed, `1` on error and
@@ -768,6 +777,32 @@ the same worktree. Binding decisions:
   `## Task T<n>` section per earlier task). Resume continues with the first
   task that has a step without a `Plan-Step` commit. A plan without
   `## Tasks` runs one agent as before.
+
+### Local config (0.16, November 2026)
+
+The config was `.claude/gated-dev.json`, committed with the project, and
+each checkout read its own copy: a worktree session saw the base branch's
+version, the launcher the main checkout's. It now lives in
+`.claude/gated-dev-simple-workflow/config.json` of the main checkout and is
+local. Binding decisions:
+
+- **Created on first use, not on install or update.** Claude Code plugins
+  have no install or update hook, and a `SessionStart` hook would add the
+  folder to every repo opened. The first `/ticket` session, launcher or
+  `/ticket-flow` command in a clone creates the file.
+- **Ignored through `.git/info/exclude`.** The same step appends
+  `/.claude/gated-dev-simple-workflow/` next to the existing pipeline
+  entries, so the project's `.gitignore` is never changed.
+- **One copy per clone.** The skill, the launcher and the flow CLI all read
+  the main checkout's file (first entry of `git worktree list`), never a
+  worktree's.
+- **Migration by moving.** When the new file is missing and the old
+  `.claude/gated-dev.json` exists, it is moved (not copied), so the settings
+  carry over and only one file is left; the developer commits the deletion.
+  Without either file, the template `templates/config.json` is copied: every
+  key with its default, `null` where the default is "not set". A test keeps
+  it equal to the defaults in code and in SKILL.md section 8 (`riskPaths`). Dry runs and `--status` move nothing
+  and read the old file.
 
 ### Lean gate follow-up
 

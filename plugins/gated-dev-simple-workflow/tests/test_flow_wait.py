@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -555,9 +556,18 @@ def test_wait_error_exits_1_and_needs_a_flow(repo, cli):
     assert (code, lines[-1]["outcome"]) == (1, "error")
 
 
-def test_flow_settings_come_from_the_config_and_flags_win(repo, cli):
+def test_cli_moves_a_legacy_config_file_and_reports_it(repo, cli):
     (repo.tmp / ".claude").mkdir()
-    (repo.tmp / ".claude" / "gated-dev.json").write_text("{}")
+    (repo.tmp / ".claude" / "gated-dev.json").write_text('{"ticketsDir": "t"}')
+    cli.run("wait", "--parent", "PROJ-100")
+    assert any(re.search(r"moved .*gated-dev\.json to .*config\.json", line) for line in cli.err)
+    assert not (repo.tmp / ".claude" / "gated-dev.json").exists()
+    assert (repo.tmp / ".claude" / "gated-dev-simple-workflow" / "config.json").read_text() == '{"ticketsDir": "t"}'
+
+
+def test_flow_settings_come_from_the_config_and_flags_win(repo, cli):
+    (repo.tmp / ".claude" / "gated-dev-simple-workflow").mkdir(parents=True)
+    (repo.tmp / ".claude" / "gated-dev-simple-workflow" / "config.json").write_text("{}")
     settings = FlowCli(env={}, run=repo.git, gh_run=repo.gh, sleep=repo.clock.sleep, now=repo.clock.now, is_alive=bool, out=print, err=print)._settings
     assert settings({}, {}) == {"max": 1, "pollSeconds": 60, "staleHours": 3, "lostWatchMinutes": 10}
     assert settings({"flow": {"pollSeconds": 30, "max": 2}}, {"max": 4}) == {"max": 4, "pollSeconds": 30, "staleHours": 3, "lostWatchMinutes": 10}

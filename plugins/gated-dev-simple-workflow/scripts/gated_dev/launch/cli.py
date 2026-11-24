@@ -142,10 +142,15 @@ class LaunchCli:
             return 0
         try:
             root = TicketProject.find_root(cwd=opts["cwd"] or os.getcwd(), run=run)
-            config = TicketProject(root, run).read_config()
+            project = TicketProject(root, run)
+            notice = None if opts["dryRun"] else project.ensure_config()
+            config = project.read_config()
         except (LaunchError, OSError) as error:
             err(str(error))
             return 1
+        for line in (notice, project.config_notice):
+            if line:
+                err(line)
         keys = opts["keys"]
         if opts["all"]:
             keys = []

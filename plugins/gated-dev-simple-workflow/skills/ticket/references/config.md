@@ -1,8 +1,22 @@
-# Configuration: `.claude/gated-dev.json`
+# Configuration: `.claude/gated-dev-simple-workflow/config.json`
 
-Optional, per project, in the checkout the session starts in. Every key is
-optional; a missing file means all defaults. Invalid JSON or an unknown key
-stops the run with a message (nothing is guessed).
+Optional, per clone, in the main checkout of the repository (the first entry
+of `git worktree list`). Sessions in a worktree, the launcher and `/ticket-flow`
+all read this one file. It is local and never committed. The first run of
+`/ticket`, the launcher or `/ticket-flow` in a clone adds
+`/.claude/gated-dev-simple-workflow/` to the repository's `.git/info/exclude`
+and creates the file: it moves the old `.claude/gated-dev.json` there when
+that file exists, and otherwise copies the plugin's template
+[`templates/config.json`](../../../templates/config.json), which lists every
+key with its default (`null` where the default is "not set"; `keyPattern` is
+`null` because its default depends on `tracker`). Every key is optional; a
+missing key or `null` means the default, so `{}` is a valid config too. Invalid JSON or an unknown key stops the run with a
+message (nothing is guessed).
+
+Old location: `.claude/gated-dev.json` was committed and read per checkout.
+After the move, commit its deletion. Dry runs and `--status` move nothing and
+still read the old file. When both files exist, the new one wins and the old
+one is reported as ignored.
 
 ```json
 {

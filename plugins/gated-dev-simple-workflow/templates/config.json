@@ -1,0 +1,38 @@
+{
+  "ticketsDir": "docs/tickets",
+  "keyPattern": null,
+  "baseBranch": null,
+  "setupCommand": null,
+  "formatCommand": null,
+  "riskPaths": [
+    "**/migrations/**",
+    "**/*policy*",
+    "**/auth/**",
+    "**/*.tf",
+    "infra/**",
+    ".github/workflows/**",
+    ".claude/**"
+  ],
+  "escalationExtra": [],
+  "devTier": "auto",
+  "models": {
+    "spec": "sonnet",
+    "plan": "opus",
+    "review": "sonnet",
+    "reviewRisk": "opus",
+    "devGodzilla": "opus",
+    "devWorkhorse": "sonnet",
+    "devPawn": "haiku"
+  },
+  "orchestratorRules": null,
+  "dryRunGate": false,
+  "mode": "auto",
+  "modes": {
+    "heavy": { "session": "opus" },
+    "medium": { "session": "sonnet" },
+    "light": { "session": "sonnet" }
+  },
+  "modeRules": [],
+  "tracker": null,
+  "flow": null
+}

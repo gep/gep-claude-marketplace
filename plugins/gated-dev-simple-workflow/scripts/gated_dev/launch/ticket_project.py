@@ -58,6 +58,7 @@ class TicketProject:
     def __init__(self, root: str | Path, run: ProcessRunner.Run = ProcessRunner.default_run) -> None:
         self.root = root
         self.run = run
+        self.config_notice: str | None = None
 
     @staticmethod
     def find_root(*, cwd: str, run: ProcessRunner.Run = ProcessRunner.default_run) -> str:
@@ -72,9 +73,61 @@ class TicketProject:
     def _outside_repo(path: str) -> bool:
         return os.path.isabs(path) or ".." in re.split(r"[\\/]", path)
 
+    CONFIG_PATH = ".claude/gated-dev-simple-workflow/config.json"
+    LEGACY_CONFIG_PATH = ".claude/gated-dev.json"
+
+    def config_file(self) -> tuple[Path, str | None]:
+        """The config file of `root` (the main checkout) and a notice about the legacy location, if any.
+
+        `CONFIG_PATH` wins; without it a `LEGACY_CONFIG_PATH` file is still read, with a notice to move it.
+        """
+        current = Path(self.root) / TicketProject.CONFIG_PATH
+        legacy = Path(self.root) / TicketProject.LEGACY_CONFIG_PATH
+        if current.exists():
+            if legacy.exists():
+                return current, f"{legacy} is ignored: {current} takes precedence; delete the old file"
+            return current, None
+        if legacy.exists():
+            return legacy, f"{legacy} is deprecated: it is moved to {current} (git-ignored) on the next run that is not a dry run"
+        return current, None
+
+    CONFIG_EXCLUDE = "/.claude/gated-dev-simple-workflow/"
+    CONFIG_TEMPLATE = Path(__file__).resolve().parents[3] / "templates" / "config.json"
+
+    def ensure_config(self) -> str | None:
+        """Makes sure `CONFIG_PATH` exists in `root` and is git-ignored; returns a notice when it changed something.
+
+        No file: a `LEGACY_CONFIG_PATH` file is moved there, otherwise `CONFIG_TEMPLATE` (every key with its default) is copied. Either way
+        `CONFIG_EXCLUDE` goes into the repository's `info/exclude` (shared by all worktrees, never committed).
+        """
+        current = Path(self.root) / TicketProject.CONFIG_PATH
+        if current.exists():
+            return None
+        legacy = Path(self.root) / TicketProject.LEGACY_CONFIG_PATH
+        self._exclude(TicketProject.CONFIG_EXCLUDE)
+        current.parent.mkdir(parents=True, exist_ok=True)
+        if legacy.exists():
+            legacy.replace(current)
+            return f"moved {legacy} to {current} (git-ignored); commit the deletion of {TicketProject.LEGACY_CONFIG_PATH}"
+        current.write_text(TicketProject.CONFIG_TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8")
+        return f"created {current} from the template (git-ignored, every key at its default)"
+
+    def _exclude(self, line: str) -> None:
+        """Appends `line` to the repository's `info/exclude` unless it is there."""
+        common = str(self.run("git", ["-C", str(self.root), "rev-parse", "--path-format=absolute", "--git-common-dir"]).stdout).strip()
+        exclude = Path(common) / "info" / "exclude"
+        text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        if line in text.splitlines():
+            return
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text(f"{text}{'' if not text or text.endswith(chr(10)) else chr(10)}{line}\n", encoding="utf-8")
+
     def read_config(self) -> dict:
-        """`.claude/gated-dev.json` of `root`, with defaults. Raises on invalid content."""
-        file = Path(self.root) / ".claude" / "gated-dev.json"
+        """The config file of `root` (`config_file`), with defaults. Raises on invalid content.
+
+        A notice about the legacy location is kept in `config_notice`.
+        """
+        file, self.config_notice = self.config_file()
         raw: dict = {}
         if file.exists():
             try:

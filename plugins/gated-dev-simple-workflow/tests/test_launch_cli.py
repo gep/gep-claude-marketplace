@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from gated_dev.launch.ticket_project import TicketProject
 from gd_testkit.entrypoints import Entrypoints
 from gd_testkit.envs import IsolatedEnv
 from gd_testkit.fakebin import FakeBin
@@ -38,8 +39,8 @@ class Project:
         self.home = tmp / "home"
         self.root = GitRepo.init_repo(tmp / "repo", origin=tmp / "origin.git" if origin else None, branch=branch)
         if config is not None:
-            (self.root / ".claude").mkdir(exist_ok=True)
-            (self.root / ".claude" / "gated-dev.json").write_text(config if isinstance(config, str) else json.dumps(config))
+            (self.root / ".claude" / "gated-dev-simple-workflow").mkdir(parents=True, exist_ok=True)
+            (self.root / ".claude" / "gated-dev-simple-workflow" / "config.json").write_text(config if isinstance(config, str) else json.dumps(config))
         for key, text in (tickets or {}).items():
             (self.root / "docs" / "tickets" / key).mkdir(parents=True, exist_ok=True)
             (self.root / "docs" / "tickets" / key / "ticket.md").write_text(text)
@@ -88,11 +89,11 @@ class Project:
 
     # runs --------------------------------------------------------------------
 
-    def launch(self, *args: str, host: dict | None = None, cwd=True) -> Result:
+    def launch(self, *args: str, host: dict | None = None, cwd: bool | Path = True) -> Result:
         env = {k: v for k, v in IsolatedEnv.clean(Entrypoints.env()).items() if k not in HOST_VARS and not k.startswith("ORCA_")}
         env.update(GitRepo.git_env(self.home))
         env.update({"PATH": str(self.fb.path), **(host or {})})
-        cmd = [*FakeBin.absolute(Entrypoints.launch()), *(["--cwd", str(self.root)] if cwd else []), *args]
+        cmd = [*FakeBin.absolute(Entrypoints.launch()), *(["--cwd", str(self.root if cwd is True else cwd)] if cwd else []), *args]
         proc = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=60, check=False)
         return Result(proc.returncode, proc.stdout, proc.stderr)
 
@@ -124,6 +125,51 @@ def demo(tmp_path):
 
 
 # --- findRun ------------------------------------------------------------------
+
+
+def test_launch_reads_the_main_checkout_config_from_a_worktree(tmp_path):
+    p = Project(tmp_path, config={"ticketsDir": "custom"})
+    wt = tmp_path / "wt"
+    GitRepo.add_worktree(p.root, wt, "side")
+    r = p.launch("--all", cwd=wt)
+    assert (r.status, r.stdout.strip()) == (0, "no ticket without a run in custom"), r.stderr
+    assert r.stderr == ""
+
+
+def exclude_lines(root: Path) -> list[str]:
+    exclude = root / ".git" / "info" / "exclude"
+    return exclude.read_text().splitlines() if exclude.exists() else []
+
+
+def test_launch_moves_the_legacy_config_into_the_ignored_folder(tmp_path):
+    p = Project(tmp_path)
+    (p.root / ".claude").mkdir()
+    (p.root / ".claude" / "gated-dev.json").write_text('{"ticketsDir": "legacy"}')
+    r = p.launch("--all")
+    assert (r.status, r.stdout.strip()) == (0, "no ticket without a run in legacy"), r.stderr
+    assert re.search(r"moved .*gated-dev\.json to .*gated-dev-simple-workflow/config\.json", r.stderr)
+    assert not (p.root / ".claude" / "gated-dev.json").exists()
+    assert (p.root / ".claude" / "gated-dev-simple-workflow" / "config.json").read_text() == '{"ticketsDir": "legacy"}'
+    assert exclude_lines(p.root).count("/.claude/gated-dev-simple-workflow/") == 1
+    assert "gated-dev-simple-workflow" not in GitRepo.git(p.root, "status", "--porcelain")
+
+    again = p.launch("--all")
+    assert (again.status, again.stderr) == (0, "")
+    assert exclude_lines(p.root).count("/.claude/gated-dev-simple-workflow/") == 1
+
+
+def test_launch_creates_an_empty_ignored_config_but_not_on_a_dry_run(tmp_path):
+    p = Project(tmp_path)
+    config = p.root / ".claude" / "gated-dev-simple-workflow" / "config.json"
+    dry = p.launch("--all", "--dry-run")
+    assert dry.status == 0, dry.stderr
+    assert not config.exists()
+    r = p.launch("--all")
+    assert r.status == 0, r.stderr
+    assert "created" in r.stderr
+    assert config.read_text() == TicketProject.CONFIG_TEMPLATE.read_text()
+    assert "/.claude/gated-dev-simple-workflow/" in exclude_lines(p.root)
+    assert "gated-dev-simple-workflow" not in GitRepo.git(p.root, "status", "--porcelain")
 
 
 def test_find_run_finds_the_key_worktree_ignores_aborted_runs_rejects_several(tmp_path):

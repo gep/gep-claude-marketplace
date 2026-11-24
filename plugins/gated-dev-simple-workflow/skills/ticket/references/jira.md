@@ -1,6 +1,6 @@
 # Jira tracker: reference
 
-Used only when `.claude/gated-dev.json` has `"tracker": {"type": "jira", ...}`.
+Used only when `.claude/gated-dev-simple-workflow/config.json` has `"tracker": {"type": "jira", ...}`.
 Without that key none of this applies: `ticket.md` is the ticket and no Jira
 call is made. `SKILL.md` refers to the sections below by number. Stage agents
 never read this file and never call Jira.
@@ -28,7 +28,7 @@ If any of the first six is missing at kickoff, stop before creating anything
 with:
 
 ```text
-tracker "jira" is configured, but this session has no Jira tools (read issue, transitions, comment, assign). Connect a Jira server or remove "tracker" from .claude/gated-dev.json.
+tracker "jira" is configured, but this session has no Jira tools (read issue, transitions, comment, assign). Connect a Jira server or remove "tracker" from .claude/gated-dev-simple-workflow/config.json.
 ```
 
 ## 2. Site

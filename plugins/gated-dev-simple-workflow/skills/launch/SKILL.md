@@ -26,7 +26,7 @@ than 3.14, run the script with the interpreter in `$GATE_INFRA_PYTHON` instead
 Ticket mode (`--mode heavy|medium|light`, applies to every key of the call):
 pass it only when the user names a mode. The session then starts as
 `claude --model <modes.<mode>.session>` (defaults: heavy `opus`, medium and
-light `sonnet`; override in `.claude/gated-dev.json`) with
+light `sonnet`; override in `.claude/gated-dev-simple-workflow/config.json`) with
 `/ticket <KEY> --mode <mode>`. Without `--mode` there is no `--model`: the
 session starts on the default model and decides the mode itself. A ticket
 with a run is resumed on the session model of the mode recorded in its

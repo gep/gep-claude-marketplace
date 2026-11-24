@@ -1,6 +1,6 @@
 ---
 name: ticket-flow
-description: Run the subtasks of one Jira parent (an epic or a story) through /ticket without choosing the next ticket yourself. Use when the user invokes /ticket-flow <PARENT> (optionally with --max N, --once, --dry-run, --status, --skip KEY [reason] or --retry KEY), or says "work through the subtasks of <PARENT>", "run the epic <PARENT>" or "pick the next ticket of <PARENT>". Needs a Jira tracker in .claude/gated-dev.json.
+description: Run the subtasks of one Jira parent (an epic or a story) through /ticket without choosing the next ticket yourself. Use when the user invokes /ticket-flow <PARENT> (optionally with --max N, --once, --dry-run, --status, --skip KEY [reason] or --retry KEY), or says "work through the subtasks of <PARENT>", "run the epic <PARENT>" or "pick the next ticket of <PARENT>". Needs a Jira tracker in .claude/gated-dev-simple-workflow/config.json.
 ---
 
 # /ticket-flow: driver for the subtasks of one parent
@@ -22,8 +22,8 @@ Rules that hold everywhere:
 
 ## 1. Start
 
-1. Read `.claude/gated-dev.json`. Without a `tracker`, stop: "`/ticket-flow` needs a Jira tracker in `.claude/gated-dev.json`." Settings are in `flow` (`references/config.md`).
-2. Check the session's Jira tools: read issue and search by JQL are both required. If either is missing, stop with: `tracker "jira" is configured, but this session has no Jira tools (read issue, search by JQL). Connect a Jira server or remove "tracker" from .claude/gated-dev.json.`
+1. Read the config of the main checkout (the first `worktree` entry of `git worktree list --porcelain`): `.claude/gated-dev-simple-workflow/config.json`, (the flow CLI creates it on its first run that is not a dry run, moving an old `.claude/gated-dev.json` there or copying the plugin's `templates/config.json`; with `--dry-run` only the old file present, read that one). Without a `tracker`, stop: "`/ticket-flow` needs a Jira tracker in `.claude/gated-dev-simple-workflow/config.json`." Settings are in `flow` (`references/config.md`).
+2. Check the session's Jira tools: read issue and search by JQL are both required. If either is missing, stop with: `tracker "jira" is configured, but this session has no Jira tools (read issue, search by JQL). Connect a Jira server or remove "tracker" from .claude/gated-dev-simple-workflow/config.json.`
 3. Read the parent issue; stop when it cannot be read. Print its key and summary.
 4. Mode flags:
    - `--status`: section 5, then end.
