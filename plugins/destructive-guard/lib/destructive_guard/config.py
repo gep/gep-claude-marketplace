@@ -1,6 +1,7 @@
-"""The gate's own settings from environment variables: GATE_ENABLED, GATE_ENV_GUARD and GATE_LOG.
+"""The gate's own settings from environment variables: GATE_ENABLED, GATE_ENV_GUARD, GATE_LOG and the
+backend switches GATE_CLEF_ENABLED / GATE_JEV_ENABLED.
 
-The Jev variables are read by the jev package. `read` is pure (env in, config out) and raises
+The per-backend variables are read by jev/backends.py. `read` is pure (env in, config out) and raises
 ConfigError for a value it does not understand.
 """
 
@@ -40,11 +41,19 @@ class GateConfig:
 
     @classmethod
     def read(cls, env: Mapping[str, str], *, cwd: str | Path | None = None) -> dict[str, Any]:
-        """env -> {enabled, envGuard, log}. Raises ConfigError for a value it does not understand."""
+        """env -> {enabled, envGuard, log, clefEnabled, jevEnabled}. Raises ConfigError for a value it does not understand."""
         log = cls.log_path(env, cwd=cwd)
         enabled = cls._flag(env, "GATE_ENABLED", True)
         env_guard = cls._flag(env, "GATE_ENV_GUARD", True)
-        return {"enabled": enabled, "envGuard": env_guard, "log": log}
+        clef_enabled = cls._flag(env, "GATE_CLEF_ENABLED", True)
+        jev_enabled = cls._flag(env, "GATE_JEV_ENABLED", True)
+        return {
+            "enabled": enabled,
+            "envGuard": env_guard,
+            "log": log,
+            "clefEnabled": clef_enabled,
+            "jevEnabled": jev_enabled,
+        }
 
     @classmethod
     def log_path(cls, env: Mapping[str, str], *, cwd: str | Path | None = None) -> str | None:

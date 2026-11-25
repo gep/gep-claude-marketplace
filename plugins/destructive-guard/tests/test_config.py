@@ -20,13 +20,21 @@ def read_config(env, **opts):
 
 
 def test_read_defaults():
-    defaults = {"enabled": True, "envGuard": True, "log": None}
+    defaults = {"enabled": True, "envGuard": True, "log": None, "clefEnabled": True, "jevEnabled": True}
     assert read_config({}) == defaults
     # empty values mean "unset"
     assert read_config(CLEAN) == defaults
 
 
-@pytest.mark.parametrize(("name", "key"), [("GATE_ENABLED", "enabled"), ("GATE_ENV_GUARD", "envGuard")])
+@pytest.mark.parametrize(
+    ("name", "key"),
+    [
+        ("GATE_ENABLED", "enabled"),
+        ("GATE_ENV_GUARD", "envGuard"),
+        ("GATE_CLEF_ENABLED", "clefEnabled"),
+        ("GATE_JEV_ENABLED", "jevEnabled"),
+    ],
+)
 def test_boolean_variables(name, key):
     for v in ["1", "true", "YES", "on", " 1 "]:
         assert read_config({name: v})[key] is True, f"{name}={v}"
