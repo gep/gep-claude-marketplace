@@ -4,7 +4,7 @@
 with `JevMock`, and each output is checked against the model and against the theses.
 
 What the code cannot do yet is listed in `PENDING` (name -> work package of the Clef plan); those
-tests check the Python model and then skip the real hook. C4 (session start halt, prompt gate) empties it.
+tests check the Python model and then skip the real hook. It is empty since C4 (session start halt, prompt gate).
 """
 
 import json
@@ -29,12 +29,7 @@ SECRET_MCP = {"query": "SELECT 1", "password": "hunter2"}
 
 # Lean examples and test groups the code does not implement yet: name -> work package. A pending
 # test still checks the Python model, then skips the real hook. Remove an entry when its package lands.
-PENDING = {
-    "prompt_gate_block": "C4",
-    "prompt_gate_pass": "C4",
-    "session_start_halt": "C4",  # replaces session_start_misconfigured_no_key (meaning changed: halt)
-    "session_start_clef_bad": "C4",
-}
+PENDING: dict[str, str] = {}
 
 
 def pending(name: str) -> None:
@@ -529,7 +524,7 @@ def test_example_session_start_on():
 def test_example_prompt_gate_block():
     assert prompt_gate_model(JEV_NO_KEY) is True
     pending("prompt_gate_block")
-    r = HookRunner.run_prompt({"GATE_CLEF_ENABLED": "0"})  # C4 adds the UserPromptSubmit runner
+    r = HookRunner.run_prompt({"GATE_CLEF_ENABLED": "0"})
     assert json.loads(r.stdout)["decision"] == "block"
 
 

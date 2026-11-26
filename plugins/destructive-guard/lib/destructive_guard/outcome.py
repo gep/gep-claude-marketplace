@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .down import Down
+from .halt import Halt
 
 # Display names of the backends in user-facing messages.
 BACKEND_NAMES = {"clef": "Clef", "jev": "Jev"}
@@ -109,10 +110,7 @@ class HookOut:
             return None
         d = self.detail or ""
         if w is Down.NO_CLASSIFIER:
-            return (
-                f"destructive-guard: no classifier available ({d}): this session is halted. "
-                "Fix the setting or set GATE_ENABLED=0."
-            )
+            return Halt.text([d])
         if w is Down.ENV_REFERENCE:
             return "destructive-guard: call mentions a .env file and was not sent to Jev; Claude Code's permissions apply"
         if w.jev_unavailable:

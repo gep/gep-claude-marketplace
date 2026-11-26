@@ -27,6 +27,10 @@ class Entrypoints:
         return ["bash", str(DG / "hooks" / "session-start.sh")]
 
     @staticmethod
+    def prompt_hook() -> list[str]:
+        return ["bash", str(DG / "hooks" / "prompt-gate.sh")]
+
+    @staticmethod
     def env_guard() -> list[str]:
         return ["bash", str(DG / "hooks" / "env-guard.sh")]
 

@@ -14,6 +14,7 @@ class EntryStubs:
     STUBS: ClassVar[list[tuple[Path, str]]] = [
         (DG / "lib" / "gate_main.py", "gate_main"),
         (DG / "lib" / "session_main.py", "session_main"),
+        (DG / "lib" / "prompt_main.py", "prompt_main"),
         (DG / "lib" / "check.py", "check"),
     ]
     TOO_OLD = re.compile(r"^needs Python >= 3\.14 \(found 3\.\d+ at .+\); set GATE_INFRA_PYTHON\n$")

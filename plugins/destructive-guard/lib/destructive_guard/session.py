@@ -1,30 +1,34 @@
-"""SessionStart hook (the Lean model's `sessionStart`): warn once about a misconfigured setting (D3).
+"""SessionStart hook (the Lean model's `sessionStart`): warn once about a misconfigured setting (D3, D17).
 
-Never contacts Jev. Silent when everything is fine or the gate is off.
+Never contacts a backend. Silent when everything is fine or the gate is off.
 
 Lean model (formal/SimpleGate.lean) -> code:
 
-| Lean                         | Here                                                          |
-| ---------------------------- | ------------------------------------------------------------- |
-| `sessionStart`               | `SessionCheck.message` (via `SessionCheck.main`)              |
-| `issues s` (Jev `bad w`)     | `SessionCheck.issue` returns a `JevConfigError` / `ConfigError` |
-| no issue, Jev `ok`           | `SessionCheck.issue` returns None: no output                  |
+| Lean                                   | Here                                                              |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| `sessionStart s`                       | `SessionCheck.message` / `SessionCheck.output` (via `main`)       |
+| `issues s` (backends that are `bad`)   | `Backends.issues`: each skipped backend with its labelled error   |
+| `none` (no issue, a backend usable)    | `message` returns None: no output                                 |
+| `SessionOut.halt` (`usable s = []`)    | `Halt.text(issues)`, the hook's text, plus `continue: false` and `stopReason` |
 
-The model's halt (`SessionOut.halt`, `promptGate`) and Clef are not implemented yet (C4).
+A bad `GATE_*` flag leaves nothing usable, so it halts (same as the hook, via `Halt.of_env`). A halted
+`SessionStart` cannot stop the session (A8); `continue`/`stopReason` are harmless where ignored. The
+prompt gate and the hook do the blocking.
 
 Outside the model (notices only, they never change a decision): the removed 0.8 variables and a
-GATE_LOG path that cannot be written. They join the same message.
+GATE_LOG path that cannot be written. They join the message of a non-halted session; a halt prints only
+its own text.
 """
 
 import json
 import os
 import sys
 from collections.abc import Mapping
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from .config import GateConfig
-from .errors import ConfigError, JevConfigError
-from .jev.config import JevConfig
+from .errors import ConfigError
+from .halt import Halt
 from .log import GateLog
 
 
@@ -44,31 +48,25 @@ class SessionCheck:
     ]
     PREFIX = "destructive-guard: "
 
-    @classmethod
-    def issue(cls, env: Mapping[str, str]) -> JevConfigError | ConfigError | None:
-        """What is wrong with the setting, or None."""
+    @staticmethod
+    def enabled(env: Mapping[str, str]) -> bool:
         try:
-            GateConfig.read(env)
-        except ConfigError as e:
-            return e
-        try:
-            JevConfig.read(env)
-        except JevConfigError as e:
-            return e
-        return None
+            return GateConfig._flag(env, "GATE_ENABLED", True)
+        except ConfigError:
+            return True  # unreadable: the gate stays on and the halt names the flag
 
     @classmethod
-    def message(cls, env: Mapping[str, str]) -> str | None:
-        """The one `systemMessage`, or None when there is nothing to say."""
-        try:
-            if not GateConfig.read(env)["enabled"]:
-                return None
-        except ConfigError:
-            pass  # a bad GATE_ENABLED value is reported below
+    def output(cls, env: Mapping[str, str]) -> dict[str, Any] | None:
+        """The hook output (`systemMessage`, plus `continue`/`stopReason` when halted), or None when silent."""
+        if not cls.enabled(env):
+            return None
+        state = Halt.of_env(env)
+        if state.halted:
+            text = Halt.text(state.issues)
+            return {"continue": False, "stopReason": text, "systemMessage": text}
         parts: list[str] = []
-        problem = cls.issue(env)
-        if problem is not None:
-            parts.append(f"{problem}: destructive-guard only blocks .env files this session")
+        if state.backends is not None:
+            parts += [f"{error} (skipped this session)" for _, error in state.backends.issues]
         removed = [name for name in cls.REMOVED if (env.get(name) or "").strip()]
         if removed:
             parts.append(f"ignoring the removed 0.8 variables {', '.join(removed)}")
@@ -78,17 +76,23 @@ class SessionCheck:
             parts.append(f"cannot write GATE_LOG {log} ({log_problem}): no log this session")
         if not parts:
             return None
-        return cls.PREFIX + "; ".join(parts)
+        return {"systemMessage": cls.PREFIX + "; ".join(parts)}
+
+    @classmethod
+    def message(cls, env: Mapping[str, str]) -> str | None:
+        """The one `systemMessage`, or None when there is nothing to say."""
+        out = cls.output(env)
+        return None if out is None else out["systemMessage"]
 
     @classmethod
     def main(cls, env: Mapping[str, str] | None = None) -> int:
         env = os.environ if env is None else env
         try:
-            message = cls.message(env)
+            out = cls.output(env)
         except Exception:  # noqa: BLE001 - a session warning must never break the session
             return 0
-        if message is not None:
-            sys.stdout.write(json.dumps({"systemMessage": message}, ensure_ascii=False, separators=(",", ":")))
+        if out is not None:
+            sys.stdout.write(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
             sys.stdout.flush()
         return 0
 

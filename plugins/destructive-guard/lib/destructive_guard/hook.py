@@ -15,8 +15,8 @@ Lean model (formal/SimpleGate.lean) -> code; tests/test_lean_conformance.py chec
 | `Call.tool p`                         | `GateHook.call_of`                                               |
 | `Call.badInput`, `Call.crash`         | `HookOut.fault(BAD_INPUT / INTERNAL_ERROR, ...)` in `main`       |
 | `Call.pythonMissing`                  | `hooks/gate.sh` (Python lookup fails; never reaches this file)   |
-| `Setting`, `usable s`                 | `Backends.read(env).usable` (a bad GATE_* flag: nothing usable)  |
-| `usable s = []` -> `deny, noClassifier` | `HookOut.halt(GateHook.halt_issues(...))` in `main`, before `.env` |
+| `Setting`, `usable s`                 | `Halt.of_env(env).usable` (a bad GATE_* flag: nothing usable)     |
+| `usable s = []` -> `deny, noClassifier` | `HookOut.halt(Halt.of_env(env).issues)` in `main`, before `.env`  |
 | `e.mentionsEnv`, `e.redact`           | `JevRequest.build_state` (None means `.env`)                     |
 | `q b` (the request to backend `b`)    | `JevClient.ask_jev(state, cfg)` with that backend's `cfg`        |
 | `consult q p (usable s)`              | the loop in `GateHook.decide` (first answer, else all failures)  |
@@ -33,6 +33,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, BinaryIO
 
 from .errors import ConfigError
+from .halt import Halt
 from .jev.client import JevClient
 from .jev.judge import JevJudge
 from .jev.request import JevRequest
@@ -76,18 +77,6 @@ class GateHook:
             sys.stdout.buffer.write(text.encode("utf-8", errors="replace"))
             sys.stdout.buffer.flush()
 
-    @staticmethod
-    def halt_issues(backends: Any) -> list[str]:
-        """Why each backend is not usable, in order: `clef: disabled by GATE_CLEF_ENABLED=0`, or its config error."""
-        issues = []
-        for name in backends.ORDER:
-            st = backends.state(name)
-            if st.kind == "off":
-                issues.append(f"{name}: disabled by GATE_{name.upper()}_ENABLED=0")
-            elif st.kind == "bad":
-                issues.append(str(st.error))
-        return issues
-
     @classmethod
     def decide(
         cls, call: Mapping[str, Any], cfgs: Mapping[str, Any] | Sequence[Mapping[str, Any]], record: dict[str, Any]
@@ -130,7 +119,6 @@ class GateHook:
     @classmethod
     def main(cls, stdin: BinaryIO | None = None, env: Mapping[str, str] | None = None) -> int:
         from .config import GateConfig
-        from .jev.backends import Backends
 
         stdin = sys.stdin.buffer if stdin is None else stdin
         env = os.environ if env is None else env
@@ -146,13 +134,9 @@ class GateHook:
                 enabled = True  # unreadable: the gate stays on and Backends.read below reports it
             if not enabled:
                 return 0
-            try:
-                backends = Backends.read(env)
-                usable = backends.usable
-                issues = cls.halt_issues(backends)
-            except ConfigError as e:
-                # A GATE_* flag the gate cannot read: nothing is usable, so the session is halted.
-                issues = [str(e)]
+            # A GATE_* flag the gate cannot read leaves nothing usable: halted (see halt.py).
+            state = Halt.of_env(env)
+            usable, issues = state.usable, state.issues
             try:
                 data = cls.parse(stdin)
             except Exception:  # noqa: BLE001 - any unreadable input is a plugin fault

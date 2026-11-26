@@ -15,7 +15,7 @@ from dg_testkit.hook import HookRunner
 from dg_testkit.jev_mock import JevMock
 
 OK = {"TYPESAFE_API_KEY": "k"}
-TAIL = "destructive-guard only blocks .env files this session"
+HALT_TAIL = "): this session is halted. Fix the setting or set GATE_ENABLED=0."
 
 
 def message(*env, cwd=None):
@@ -24,35 +24,85 @@ def message(*env, cwd=None):
     return json.loads(r.stdout)["systemMessage"] if r.stdout else None
 
 
-def test_all_fine_prints_nothing():
+def test_both_ok_prints_nothing():
     assert HookRunner.run_session(OK).stdout == ""
 
 
-def test_no_key():
-    assert message() == f"destructive-guard: TYPESAFE_API_KEY is not set: {TAIL}"
+def test_no_key_only_jev_is_skipped():
+    # Clef is usable (default URL), Jev has no key: skipped and named, not halted.
+    r = HookRunner.run_session()
+    assert json.loads(r.stdout) == {
+        "systemMessage": "destructive-guard: jev: TYPESAFE_API_KEY is not set (skipped this session)"
+    }
 
 
-def test_bad_url():
+def test_clef_bad_is_listed_not_halted():
+    r = HookRunner.run_session(OK, {"GATE_CLEF_URL": "http://example.com"})
+    assert json.loads(r.stdout) == {
+        "systemMessage": "destructive-guard: clef: GATE_CLEF_URL must use https (skipped this session)"
+    }
+
+
+def test_jev_bad_url_is_listed():
     assert message(OK, {"GATE_JEV_URL": "http://example.com"}) == (
-        f"destructive-guard: GATE_JEV_URL must use https: {TAIL}"
+        "destructive-guard: jev: GATE_JEV_URL must use https (skipped this session)"
     )
 
 
-def test_bad_prompt_file(tmp_path):
+def test_both_bad_listed_is_a_halt():
+    r = HookRunner.run_session({"GATE_CLEF_URL": "http://example.com"})
+    text = json.loads(r.stdout)["systemMessage"]
+    assert text == (
+        "destructive-guard: no classifier available (clef: GATE_CLEF_URL must use https; "
+        "jev: TYPESAFE_API_KEY is not set" + HALT_TAIL
+    )
+
+
+def test_halt_has_the_exact_text_and_stops():
+    r = HookRunner.run_session({"GATE_CLEF_ENABLED": "0"})
+    out = json.loads(r.stdout)
+    text = (
+        "destructive-guard: no classifier available (clef: disabled by GATE_CLEF_ENABLED=0; "
+        "jev: TYPESAFE_API_KEY is not set" + HALT_TAIL
+    )
+    assert out == {"continue": False, "stopReason": text, "systemMessage": text}
+
+
+def test_halt_text_is_the_hooks_text():
+    env = {"GATE_CLEF_ENABLED": "0", "GATE_JEV_ENABLED": "0"}
+    hook = HookRunner.run(HookRunner.bash_input("ls", "."), env)
+    assert json.loads(hook.stdout)["systemMessage"] == message(env)
+
+
+def test_bad_flag_halts():
+    msg = message(OK, {"GATE_CLEF_ENABLED": "maybe"})
+    assert msg.startswith("destructive-guard: no classifier available (GATE_CLEF_ENABLED must be")
+    assert msg.endswith(HALT_TAIL)
+    assert message(OK, {"GATE_ENABLED": "maybe"}).endswith(HALT_TAIL)
+
+
+def test_bad_shared_value_halts():
+    msg = message(OK, {"GATE_JEV_ESCALATE_THRESHOLD": "7"})
+    assert msg.endswith(HALT_TAIL)
+    assert "clef: GATE_JEV_ESCALATE_THRESHOLD" in msg
+    assert "jev: GATE_JEV_ESCALATE_THRESHOLD" in msg
+
+
+def test_bad_prompt_file_halts_with_both_listed(tmp_path):
     msg = message(OK, {"GATE_JEV_PROMPT": str(tmp_path / "missing.json")})
-    assert msg.startswith("destructive-guard: GATE_JEV_PROMPT: cannot read ")
-    assert msg.endswith(TAIL)
+    assert "clef: GATE_JEV_PROMPT: cannot read " in msg
+    assert "jev: GATE_JEV_PROMPT: cannot read " in msg
+    assert msg.endswith(HALT_TAIL)
 
 
-def test_bad_value():
-    assert message(OK, {"GATE_JEV_TIMEOUT_MS": "x"}).startswith("destructive-guard: GATE_JEV_TIMEOUT_MS must be")
-    assert message(OK, {"GATE_ENABLED": "maybe"}).startswith("destructive-guard: GATE_ENABLED must be 0 or 1")
+def test_bad_backend_timeout_is_listed():
+    assert message(OK, {"GATE_JEV_TIMEOUT_MS": "x"}).startswith("destructive-guard: jev: GATE_JEV_TIMEOUT_MS must be")
 
 
 def test_removed_variables_are_listed_in_the_same_message():
     msg = message({"GATE_CHECKS": "none", "GATE_JEV": "1", "GATE_STRICT": "1"})
     assert msg == (
-        f"destructive-guard: TYPESAFE_API_KEY is not set: {TAIL}; "
+        "destructive-guard: jev: TYPESAFE_API_KEY is not set (skipped this session); "
         "ignoring the removed 0.8 variables GATE_CHECKS, GATE_STRICT, GATE_JEV"
     )
     assert message(OK, {"GATE_JEV_SCOPE": "bash"}) == (
@@ -70,6 +120,7 @@ def test_removed_list_matches_the_plan():
 @pytest.mark.parametrize("value", ["0", "false", "OFF"])
 def test_gate_disabled_is_silent(value):
     assert HookRunner.run_session({"GATE_ENABLED": value, "GATE_CHECKS": "x"}).stdout == ""
+    assert HookRunner.run_session({"GATE_ENABLED": value, "GATE_CLEF_ENABLED": "0"}).stdout == ""
 
 
 def test_never_contacts_jev(jev: JevMock):
@@ -114,8 +165,8 @@ def test_unwritable_log_is_reported(tmp_path):
 def test_unwritable_log_joins_the_misconfigured_message(tmp_path):
     blocker = tmp_path / "a-file"
     blocker.write_text("")
-    msg = message({"GATE_LOG": str(blocker / "gate.log"), "GATE_ENV_GUARD": "maybe"})
-    assert msg.startswith("destructive-guard: GATE_ENV_GUARD must be 0 or 1")
+    msg = message({"GATE_LOG": str(blocker / "gate.log")})
+    assert msg.startswith("destructive-guard: jev: TYPESAFE_API_KEY is not set (skipped this session)")
     assert "; cannot write GATE_LOG " in msg
 
 

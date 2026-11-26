@@ -59,5 +59,23 @@ class HookRunner:
         return HookResult(proc.returncode, proc.stdout.decode("utf-8", errors="replace"))
 
     @staticmethod
+    def run_prompt(
+        *env: Mapping[str, str],
+        cwd: Path | str | None = None,
+        timeout: float = 30,
+    ) -> HookResult:
+        """The UserPromptSubmit hook (prompt-gate.sh): `{"decision":"block",...}` or nothing."""
+        proc = subprocess.run(
+            Entrypoints.prompt_hook(),
+            input=json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": "hello"}).encode(),
+            capture_output=True,
+            env=IsolatedEnv.clean(Entrypoints.env(), *env),
+            cwd=cwd,
+            timeout=timeout,
+            check=False,
+        )
+        return HookResult(proc.returncode, proc.stdout.decode("utf-8", errors="replace"))
+
+    @staticmethod
     def decision(stdout: str) -> dict:
         return json.loads(stdout)["hookSpecificOutput"]

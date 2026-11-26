@@ -32,5 +32,5 @@ src = [
 
 # Entry stubs must parse on Python 3.7 and still check the version themselves.
 [tool.ruff.lint.per-file-ignores]
-"plugins/destructive-guard/lib/{check,gate_main,session_main}.py" = ["UP031", "UP036"]
+"plugins/destructive-guard/lib/{check,gate_main,session_main,prompt_main}.py" = ["UP031", "UP036"]
 "plugins/gated-dev-simple-workflow/{hooks/notify,scripts/launch,scripts/watch_pr,scripts/flow}.py" = ["UP031", "UP036"]
