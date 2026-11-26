@@ -1,4 +1,5 @@
-"""The Jev HTTP client: one call within an overall time budget, with retries."""
+"""The classifier HTTP client (Clef and Jev share the request and answer shape): one call within an
+overall time budget, with retries. `Authorization` is sent only when the backend has a key."""
 
 import json
 import math
@@ -15,7 +16,7 @@ from .request import JevRequest
 
 
 class JevClient:
-    """Calls Jev; `now` and `sleep` are injectable for tests."""
+    """Calls one backend (Clef or Jev); `now` and `sleep` are injectable for tests."""
 
     def __init__(
         self,
@@ -71,18 +72,16 @@ class JevClient:
         try:
             prompt = JevRequest._prompt_of(cfg)
             body = JevRequest._dumps(JevRequest.request_body(state, cfg["model"], prompt)).encode("utf-8", "replace")
+            headers_out = {"content-type": "application/json"}
+            if cfg.get("apiKey"):
+                headers_out["authorization"] = f"Bearer {cfg['apiKey']}"
             attempt = 0
             while True:
                 attempt += 1
                 remaining = deadline - clock()
                 if remaining <= 0:
                     return fail("timeout")
-                request = urllib.request.Request(
-                    cfg["url"],
-                    data=body,
-                    method="POST",
-                    headers={"authorization": f"Bearer {cfg['apiKey']}", "content-type": "application/json"},
-                )
+                request = urllib.request.Request(cfg["url"], data=body, method="POST", headers=headers_out)
                 status = 0
                 headers: Any = None
                 raw = b""

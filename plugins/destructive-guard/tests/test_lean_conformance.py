@@ -3,9 +3,8 @@
 `model` is the Lean `hook` in Python, per mille like the model. Every run goes through the real hook
 with `JevMock`, and each output is checked against the model and against the theses.
 
-The model is ahead of the code (C1 of the Clef plan): Clef, the fallback chain and the halt are
-modelled, not implemented. What the code cannot do yet is listed in `PENDING` (name -> work
-package); those tests check the Python model and then skip the real hook. C3/C4 empty the list.
+What the code cannot do yet is listed in `PENDING` (name -> work package of the Clef plan); those
+tests check the Python model and then skip the real hook. C4 (session start halt, prompt gate) empties it.
 """
 
 import json
@@ -31,15 +30,6 @@ SECRET_MCP = {"query": "SELECT 1", "password": "hunter2"}
 # Lean examples and test groups the code does not implement yet: name -> work package. A pending
 # test still checks the Python model, then skips the real hook. Remove an entry when its package lands.
 PENDING = {
-    "halt": "C3",  # matrix rows with no usable backend: deny + continue:false instead of silence
-    "clef_answers": "C3",
-    "clef_down_jev_answers": "C3",
-    "both_down_last_warning": "C3",
-    "clef_off_jev_ok": "C3",
-    "clef_bad_jev_ok": "C3",
-    "both_off_deny": "C3",
-    "clef_off_jev_no_key_deny": "C3",  # replaces misconfigured_no_key_silent (meaning changed: halt)
-    "halt_env_mention_denies": "C3",
     "prompt_gate_block": "C4",
     "prompt_gate_pass": "C4",
     "session_start_halt": "C4",  # replaces session_start_misconfigured_no_key (meaning changed: halt)
@@ -120,61 +110,92 @@ def prompt_gate_model(setting: tuple[str, str]) -> bool:
     return not usable(setting)
 
 
+# Warning texts -> the model's `Down`. A backend failure names the backend (`Clef ...`, `Jev ...`); with
+# several, the last one is the model's warning (`consult` keeps the last `down`).
+BACKEND_WARNING_TEXT = [
+    ("did not answer in time", "timeout"),
+    ("returned http", "http"),
+    ("could not be reached", "network"),
+    ("'s answer was malformed", "malformed"),
+]
 WARNING_TEXT = [
-    ("Jev did not answer in time", "timeout"),
-    ("Jev returned http", "http"),
-    ("Jev could not be reached", "network"),
-    ("Jev's answer was malformed", "malformed"),
     ("mentions a .env file", "envReference"),
     ("could not read the hook input", "badInput"),
     ("no Python >= 3.14 found", "pythonMissing"),
     ("internal error", "internalError"),
+    ("no classifier available", "noClassifier"),
 ]
+BACKEND_FAILURE = re.compile(r"(Clef|Jev)(?: did not answer in time| returned http|'s answer was malformed| could not be reached)")
 
 
 @dataclass
 class Out:
     stdout: str
-    decision: str  # none | ask
+    decision: str  # none | ask | deny
     warning: str | None
     reason: str | None
+
+
+def warning_of(message: str) -> str:
+    """The model's `Down` for one systemMessage."""
+    failures = list(BACKEND_FAILURE.finditer(message))
+    if failures:
+        last = failures[-1].group(0)
+        return next(kind for text, kind in BACKEND_WARNING_TEXT if text in last)
+    return next(kind for text, kind in WARNING_TEXT if text in message)
 
 
 def read(stdout: str) -> Out:
     """Parses one raw stdout and checks S1 and the raw-stdout scan on the way.
 
-    Only for unhalted runs: the halt's `deny` + `continue: false` (S1, S12) is read in C3."""
+    `deny` comes only with the halt (S1, S12): then `continue: false` and `stopReason` too (A10)."""
     if stdout == "":
         return Out(stdout, "none", None, None)
-    # S5/S1: the raw bytes never contain a way to allow, deny or stop anything.
-    assert not re.search(r'"(allow|deny)"', stdout), stdout
-    for forbidden in ("continue", "stopReason", "updatedInput", "additionalContext", '"decision"', "suppressOutput"):
+    # S5/S1: the raw bytes never contain a way to allow anything, or to change the call.
+    assert '"allow"' not in stdout, stdout
+    for forbidden in ("updatedInput", "additionalContext", '"decision"', "suppressOutput"):
         assert forbidden not in stdout, (forbidden, stdout)
     data = json.loads(stdout)
-    assert set(data) <= {"hookSpecificOutput", "systemMessage"}, data
+    halted = '"deny"' in stdout
+    if halted:
+        assert set(data) == {"hookSpecificOutput", "systemMessage", "continue", "stopReason"}, data
+        assert data["continue"] is False
+        assert data["stopReason"] == data["systemMessage"]
+    else:
+        assert "continue" not in stdout and "stopReason" not in stdout, stdout
+        assert set(data) <= {"hookSpecificOutput", "systemMessage"}, data
     specific = data.get("hookSpecificOutput")
     decision, reason = "none", None
     if specific is not None:
         assert set(specific) == {"hookEventName", "permissionDecision", "permissionDecisionReason"}, specific
         assert specific["hookEventName"] == "PreToolUse"
-        assert specific["permissionDecision"] == "ask"  # S1
-        decision, reason = "ask", specific["permissionDecisionReason"]
+        assert specific["permissionDecision"] == ("deny" if halted else "ask")  # S1
+        decision, reason = specific["permissionDecision"], specific["permissionDecisionReason"]
         assert reason
+    else:
+        assert not halted
     warning = None
     message = data.get("systemMessage")
     if message is not None:
         assert message.startswith("destructive-guard: ")
-        warning = next(kind for text, kind in WARNING_TEXT if text in message)
+        warning = warning_of(message)
     return Out(stdout, decision, warning, reason)
 
 
 def check_theses(out: Out, expected: tuple[str, str | None], sent: bool, answered: bool) -> None:
     decision, warning = expected
     assert (out.decision, out.warning) == (decision, warning)
-    # S3: a warning comes with ask exactly for the Jev and plugin faults; the .env warning has no decision.
+    # S3: a warning comes with ask exactly for the backend and plugin faults; deny only with noClassifier;
+    # the .env warning has no decision.
     if out.warning is not None:
         assert (out.decision == "ask") == (out.warning in ASKS)
-    # S5: the plugin only adds prompts, whatever Claude Code would have done.
+        if out.decision == "deny":
+            assert out.warning == "noClassifier"
+        if out.warning == "envReference":
+            assert out.decision == "none"
+    # S1, S12: deny comes only with the halt warning.
+    assert (out.decision == "deny") == (out.warning == "noClassifier")
+    # S5: the plugin only adds prompts (or, halted, denies), whatever Claude Code would have done.
     for claude, rank in RANK.items():
         assert RANK[effective(out.decision, claude)] >= rank
     # S4: with no decision the final permission is Claude Code's own.
@@ -206,13 +227,6 @@ def hook(jev):
         return read(r.stdout)
 
     return run
-
-
-@pytest.fixture
-def clef():
-    """A second mock standing in for Clef (same request and answer shape as Jev)."""
-    with JevMock() as mock:
-        yield mock
 
 
 @pytest.fixture
@@ -279,9 +293,8 @@ def test_gated_calls(hook, jev, setting, jev_case, tool):
     expected = model(JEV_ONLY if setting == "on" else JEV_NO_KEY, "tool", q)
     if setting != "on":
         assert expected == ("deny", "noClassifier")  # S12: no usable backend halts
-        pending("halt")
     out = hook(setting, TOOLS[tool], answer, extra if setting == "on" else {})
-    check_theses(out, expected, sent=setting == "on", answered=q[0] == "answer")
+    check_theses(out, expected, sent=setting == "on", answered=setting == "on" and q[0] == "answer")
     if setting == "on":
         bodies_are_clean(jev)
         # S10: Jev on, call sent, Jev unavailable -> never silent.
@@ -292,6 +305,7 @@ def test_gated_calls(hook, jev, setting, jev_case, tool):
             assert out.reason.startswith("jev: ")
     else:
         # S12, S7: halted, the call is denied and nothing is sent.
+        assert out.reason.startswith("no-classifier: clef: disabled by GATE_CLEF_ENABLED=0; jev: ")
         assert jev.hits == 0
 
 
@@ -301,7 +315,6 @@ def test_env_calls_are_never_sent(hook, jev, setting, call):
     expected = model(JEV_ONLY if setting == "on" else JEV_NO_KEY, "env", ("answer", 600))
     if setting != "on":
         assert expected == ("deny", "noClassifier")  # S12: the halt comes before the .env skip
-        pending("halt")
     out = hook(setting, ENV_CALLS[call], JEV["risk-gt-escalate"][0])
     check_theses(out, expected, False, False)
     assert jev.hits == 0
@@ -457,6 +470,15 @@ CHAIN_CASE = {
 }
 
 
+CHAIN_REASON = {
+    "clef_answers": "clef: destructive p=0.30 risk=0.60",
+    "clef_down_jev_answers": "jev: destructive p=0.30 risk=0.60",
+    "both_down_last_warning": "clef-unavailable: network error; jev-unavailable: timeout after 300 ms",
+    "both_off_deny": "no-classifier: clef: disabled by GATE_CLEF_ENABLED=0; jev: disabled by GATE_JEV_ENABLED=0",
+    "clef_off_jev_no_key_deny": "no-classifier: clef: disabled by GATE_CLEF_ENABLED=0; jev: TYPESAFE_API_KEY is not set",
+}
+
+
 @pytest.mark.parametrize("name", list(EXAMPLES))
 def test_example(name, request):
     setting, call, q, expected = EXAMPLES[name]
@@ -472,6 +494,8 @@ def test_example(name, request):
         stdin, clef_case, jev_case = CHAIN_CASE[name]
         out = request.getfixturevalue("chain")(setting, stdin, clef_case, jev_case)
         assert (out.decision, out.warning) == expected
+        # S11: the reason names the backend that decided (or each one that failed).
+        assert out.reason == CHAIN_REASON.get(name, out.reason)
     elif name == "env_mention_not_sent":
         out = hook("on", ENV_CALLS["bash-env"], JEV["risk-gt-escalate"][0])
         assert (out.decision, out.warning) == expected

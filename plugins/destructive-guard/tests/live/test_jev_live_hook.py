@@ -51,10 +51,13 @@ def test_tiny_timeout_asks_with_timeout(run):
     assert "did not answer in time" in out["systemMessage"]
 
 
-def test_no_key_is_silent_and_sends_nothing(live_env, run):
+def test_no_key_halts_and_sends_nothing(live_env, run):
     before = LiveJev.requests
     r = run(ASK_CALL, key=False, sends=False)
-    assert (r.status, r.stdout) == (0, "")
+    assert r.status == 0
+    out = json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert out["continue"] is False
     assert LiveJev.requests == before
     session = HookRunner.run_session({k: v for k, v in live_env.items() if k != "TYPESAFE_API_KEY"})
     assert "TYPESAFE_API_KEY is not set" in json.loads(session.stdout)["systemMessage"]

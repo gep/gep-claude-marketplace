@@ -1,37 +1,43 @@
-"""PreToolUse hook (the Lean model's `hook`): one Bash or MCP call in, ask or nothing out.
+"""PreToolUse hook (the Lean model's `hook`): one Bash or MCP call in, ask, nothing or (halted) deny out.
 
-The call goes to Jev (redacted); a risky answer asks, a safe or uncertain one gives no decision, so
-Claude Code's own permissions apply. It never prints allow or deny. Jev unavailable (D11) and plugin
-faults (D12) ask with a warning. A misconfigured setting is silent here: `SessionStart` warns once.
+The call goes (redacted) to the usable backends in order, Clef first, Jev second (D14); the first
+answer decides: a risky answer asks, a safe or uncertain one gives no decision, so Claude Code's own
+permissions apply. A backend that does not answer falls through to the next (D15); all down asks
+with a warning (D11). Plugin faults (D12) ask with a warning. A misconfigured backend is skipped
+silently (`SessionStart` names it). No usable backend at all halts (D17): `deny` + `continue: false`,
+checked before the `.env` skip. Never `allow`.
 
 Lean model (formal/SimpleGate.lean) -> code; tests/test_lean_conformance.py checks the examples:
 
-| Lean                                  | Here                                                           |
-| ------------------------------------- | -------------------------------------------------------------- |
-| `hook`                                | `GateHook.main` (input, setting) and `GateHook.decide` (call)  |
-| `Call.tool p`                         | `GateHook.call_of`                                             |
-| `Call.badInput`, `Call.crash`         | `HookOut.fault(BAD_INPUT / INTERNAL_ERROR, ...)` in `main`     |
-| `Call.pythonMissing`                  | `hooks/gate.sh` (Python lookup fails; never reaches this file) |
-| `e.mentionsEnv`, `e.redact`           | `JevRequest.build_state` (None means `.env`)                   |
-| `q .jev` (the Jev request)            | `JevClient.ask_jev`                                            |
-| `judge c (consult ...)`               | `JevJudge.judge` (Jev only; `consult` over Clef comes in C3)   |
-| `Setting` with `jev := .bad _`        | `JevConfigError` in `main`: silent, exit 0 (the model halts: C3) |
-| `HookOut`, `Down`                     | `outcome.HookOut`, `outcome.Down`                              |
+| Lean                                  | Here                                                             |
+| ------------------------------------- | ---------------------------------------------------------------- |
+| `hook`                                | `GateHook.main` (input, setting) and `GateHook.decide` (call)    |
+| `Call.tool p`                         | `GateHook.call_of`                                               |
+| `Call.badInput`, `Call.crash`         | `HookOut.fault(BAD_INPUT / INTERNAL_ERROR, ...)` in `main`       |
+| `Call.pythonMissing`                  | `hooks/gate.sh` (Python lookup fails; never reaches this file)   |
+| `Setting`, `usable s`                 | `Backends.read(env).usable` (a bad GATE_* flag: nothing usable)  |
+| `usable s = []` -> `deny, noClassifier` | `HookOut.halt(GateHook.halt_issues(...))` in `main`, before `.env` |
+| `e.mentionsEnv`, `e.redact`           | `JevRequest.build_state` (None means `.env`)                     |
+| `q b` (the request to backend `b`)    | `JevClient.ask_jev(state, cfg)` with that backend's `cfg`        |
+| `consult q p (usable s)`              | the loop in `GateHook.decide` (first answer, else all failures)  |
+| `judge c (.answer r)`                 | `JevJudge.judge` (reason names the backend)                      |
+| `judge c (.down w)` (last `w`)        | `HookOut.unavailable(*failures)` (warning = last failure's kind) |
+| `HookOut`, `Down`                     | `outcome.HookOut`, `outcome.Down`                                |
 """
 
 import json
 import os
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, BinaryIO
 
-from .errors import ConfigError, JevConfigError
+from .errors import ConfigError
 from .jev.client import JevClient
 from .jev.judge import JevJudge
 from .jev.request import JevRequest
 from .log import GateLog
-from .outcome import Down, HookOut
+from .outcome import Down, Failure, HookOut
 
 
 class GateHook:
@@ -70,30 +76,61 @@ class GateHook:
             sys.stdout.buffer.write(text.encode("utf-8", errors="replace"))
             sys.stdout.buffer.flush()
 
+    @staticmethod
+    def halt_issues(backends: Any) -> list[str]:
+        """Why each backend is not usable, in order: `clef: disabled by GATE_CLEF_ENABLED=0`, or its config error."""
+        issues = []
+        for name in backends.ORDER:
+            st = backends.state(name)
+            if st.kind == "off":
+                issues.append(f"{name}: disabled by GATE_{name.upper()}_ENABLED=0")
+            elif st.kind == "bad":
+                issues.append(str(st.error))
+        return issues
+
     @classmethod
-    def decide(cls, call: Mapping[str, Any], cfg: Mapping[str, Any], record: dict[str, Any]) -> HookOut:
-        """Call -> Jev -> output. Fills `record` for GATE_LOG."""
+    def decide(
+        cls, call: Mapping[str, Any], cfgs: Mapping[str, Any] | Sequence[Mapping[str, Any]], record: dict[str, Any]
+    ) -> HookOut:
+        """Call -> the usable backends in order (one settings dict or a non-empty list, Clef first) -> output.
+        Fills `record` for GATE_LOG: `backend` (who answered, or None) and `fallback` (the ones that did not)."""
+        chain = [cfgs] if isinstance(cfgs, Mapping) else list(cfgs)
+        if not chain:
+            raise ValueError("decide needs a usable backend (no backend usable is the halt)")
+        fallback: list[dict[str, Any]] = []
+        record.update(backend=None, fallback=fallback)
         state = JevRequest.build_state(call)
         if state is None:
             record.update(command=None, input=None, decision="none", warning=Down.ENV_REFERENCE.value)
             return HookOut("none", warning=Down.ENV_REFERENCE)
         record["command" if call["tool"] == "Bash" else "input"] = state.get("command", state.get("input"))
-        result = JevClient().ask_jev(state, cfg)
-        out = JevJudge.judge(result, cfg)
-        probs = result.get("probabilities")
-        prompt = JevRequest._prompt_of(cfg)
-        record.update(
-            probabilities=probs,
-            risk=JevJudge.risk(probs, prompt) if probs else None,
-            usage=result.get("usage"),
-            latencyMs=result.get("latencyMs"),
-        )
-        return out
+        failures: list[Failure] = []
+        total_ms = 0
+        for cfg in chain:
+            result = JevClient().ask_jev(state, cfg)
+            total_ms += result.get("latencyMs") or 0
+            probs = result.get("probabilities")
+            if not probs:
+                error = str(result.get("error") or "network")
+                failures.append(JevJudge.failure(error, cfg))
+                fallback.append({"backend": JevJudge.backend_of(cfg), "error": error, "latencyMs": result.get("latencyMs")})
+                continue
+            prompt = JevRequest._prompt_of(cfg)
+            record.update(
+                backend=JevJudge.backend_of(cfg),
+                probabilities=probs,
+                risk=JevJudge.risk(probs, prompt),
+                usage=result.get("usage"),
+                latencyMs=total_ms,
+            )
+            return JevJudge.judge(result, cfg)
+        record.update(probabilities=None, risk=None, usage=None, latencyMs=total_ms)
+        return HookOut.unavailable(*failures)
 
     @classmethod
     def main(cls, stdin: BinaryIO | None = None, env: Mapping[str, str] | None = None) -> int:
         from .config import GateConfig
-        from .jev.config import JevConfig
+        from .jev.backends import Backends
 
         stdin = sys.stdin.buffer if stdin is None else stdin
         env = os.environ if env is None else env
@@ -102,13 +139,20 @@ class GateHook:
         out: HookOut | None = None
         try:
             log_path = GateConfig.log_path(env)
+            usable: list[dict[str, Any]] = []
             try:
-                gate = GateConfig.read(env)
-                if not gate["enabled"]:
-                    return 0
-                setting_error: Exception | None = None
+                enabled = GateConfig._flag(env, "GATE_ENABLED", True)
+            except ConfigError:
+                enabled = True  # unreadable: the gate stays on and Backends.read below reports it
+            if not enabled:
+                return 0
+            try:
+                backends = Backends.read(env)
+                usable = backends.usable
+                issues = cls.halt_issues(backends)
             except ConfigError as e:
-                setting_error = e
+                # A GATE_* flag the gate cannot read: nothing is usable, so the session is halted.
+                issues = [str(e)]
             try:
                 data = cls.parse(stdin)
             except Exception:  # noqa: BLE001 - any unreadable input is a plugin fault
@@ -118,17 +162,14 @@ class GateHook:
                 call = cls.call_of(data)
                 if call is None:
                     return 0
-                try:
-                    if setting_error is not None:
-                        raise JevConfigError(str(setting_error), "badValue")
-                    cfg = JevConfig.read(env)
-                except JevConfigError as e:
-                    # S9: silent per call; the session warning says what is wrong.
-                    GateLog.write(log_path, {**record, "decision": "none", "warning": None, "misconfigured": e.kind})
-                    return 0
-                t0 = time.monotonic()
-                out = cls.decide(call, cfg, record)
-                record.setdefault("latencyMs", round((time.monotonic() - t0) * 1000))
+                if not usable:
+                    # S12: halted; before the .env skip, nothing is sent.
+                    out = HookOut.halt(issues)
+                else:
+                    # S9: a bad backend is skipped silently; the session warning names it.
+                    t0 = time.monotonic()
+                    out = cls.decide(call, usable, record)
+                    record.setdefault("latencyMs", round((time.monotonic() - t0) * 1000))
         except Exception as e:  # noqa: BLE001
             out = HookOut.fault(Down.INTERNAL_ERROR, type(e).__name__)
         record.update(
@@ -139,7 +180,6 @@ class GateHook:
         cls.write(out)
         GateLog.write(log_path, record)
         return 0
-
 
 def main(stdin: BinaryIO | None = None, env: Mapping[str, str] | None = None) -> int:
     return GateHook.main(stdin, env)

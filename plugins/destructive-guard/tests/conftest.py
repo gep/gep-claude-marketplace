@@ -19,3 +19,10 @@ def jev():
     """A local Jev mock; `jev.url`, `jev.answer(...)`, `jev.bodies`, `jev.hits`."""
     with JevMock() as mock:
         yield mock
+
+
+@pytest.fixture
+def clef():
+    """A second local mock standing in for Clef (same request and answer shape as Jev)."""
+    with JevMock() as mock:
+        yield mock

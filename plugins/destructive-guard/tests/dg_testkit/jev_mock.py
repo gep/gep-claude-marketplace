@@ -1,4 +1,6 @@
-"""A local HTTP stand-in for the Jev classifier service."""
+"""A local HTTP stand-in for a classifier backend: Jev or Clef (same request and answer shape).
+
+The `jev` and `clef` fixtures (conftest.py) each start one."""
 
 import json
 import threading

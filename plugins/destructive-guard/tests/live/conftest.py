@@ -10,7 +10,7 @@ from dg_testkit.live_jev import LiveJev
 
 @pytest.fixture
 def live_env(tmp_path):
-    """A clean env plus the real TYPESAFE_API_KEY, a generous timeout and logs in tmp_path."""
+    """A clean env plus the real TYPESAFE_API_KEY, a generous timeout and logs in tmp_path; Jev alone (Clef off)."""
     key = os.environ.get("TYPESAFE_API_KEY", "").strip()
     if not key:
         if os.environ.get("LIVE_JEV_REQUIRED") == "1":
@@ -21,6 +21,7 @@ def live_env(tmp_path):
             "TYPESAFE_API_KEY": key,
             "GATE_JEV_TIMEOUT_MS": "10000",
             "GATE_LOG": str(tmp_path / "gate.log"),
+            "GATE_CLEF_ENABLED": "0",
         }
     )
 

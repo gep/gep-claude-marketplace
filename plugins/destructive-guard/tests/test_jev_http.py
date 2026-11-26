@@ -1,4 +1,5 @@
-"""Jev requests through hooks/gate.sh against the local Jev mock: request shape, retries, timeouts, the audit log (GATE_LOG)."""
+"""Backend requests through hooks/gate.sh against local mocks: request shape, auth header, retries, timeouts,
+the audit log (GATE_LOG). Jev alone (Clef off) unless a test says otherwise."""
 
 import json
 import time
@@ -51,6 +52,7 @@ def run_jev(jev, tmp_path):
             "GATE_JEV_PROMPT": "cloud-change",
             "GATE_LOG": str(log_path),
             "GATE_JEV_TIMEOUT_MS": "5000",
+            "GATE_CLEF_ENABLED": "0",
         }
         before = jev.hits
         started = time.monotonic()
@@ -247,6 +249,7 @@ def test_audit_log_redacted_records(jev, tmp_path):
         "GATE_JEV_URL": jev.url,
         "GATE_JEV_PROMPT": "cloud-change",
         "GATE_LOG": str(log),
+        "GATE_CLEF_ENABLED": "0",
     }
 
     def go(stdin):
@@ -281,13 +284,16 @@ def test_audit_log_redacted_records(jev, tmp_path):
     assert lines[3]["warning"] == "http"
 
 
-def test_misconfigured_calls_are_logged_as_such(tmp_path):
+def test_halted_calls_are_logged_as_such(tmp_path):
     log = tmp_path / "gate.log"
-    r = HookRunner.run(bash("ls"), {"GATE_LOG": str(log)})
-    assert r.stdout == ""
+    r = HookRunner.run(bash("ls"), {"GATE_LOG": str(log), "GATE_CLEF_ENABLED": "0"})
+    assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
     [line] = [json.loads(x) for x in log.read_text().splitlines()]
-    assert line["misconfigured"] == "noKey"
-    assert line["warning"] is None
+    assert line["tool"] == "Bash"
+    assert line["decision"] == "deny"
+    assert line["warning"] == "noClassifier"
+    assert line["reason"] == "no-classifier: clef: disabled by GATE_CLEF_ENABLED=0; jev: TYPESAFE_API_KEY is not set"
+    assert "command" not in line  # nothing was prepared for sending
 
 
 def test_log_is_off_by_default_and_a_bad_path_does_not_fail_the_hook(jev, run_jev, tmp_path):
@@ -308,12 +314,102 @@ def test_log_creates_missing_directories(jev, run_jev, tmp_path):
     assert line["decision"] == "ask"
 
 
-@pytest.mark.parametrize("flag", ["GATE_ENV_GUARD", "GATE_ENABLED"])
-def test_bad_gate_flag_is_still_logged(tmp_path, flag):
+@pytest.mark.parametrize("flag", ["GATE_ENV_GUARD", "GATE_ENABLED", "GATE_JEV_ENABLED"])
+def test_bad_gate_flag_halts_and_is_logged(tmp_path, flag):
     log = tmp_path / "gate.log"
     r = HookRunner.run(bash("ls"), {"TYPESAFE_API_KEY": "k", "GATE_LOG": str(log), flag: "maybe"})
-    assert r.stdout == ""
+    assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecisionReason"] == f'no-classifier: {flag} must be 0 or 1, got "maybe"'
     [line] = [json.loads(x) for x in log.read_text().splitlines()]
     assert line["tool"] == "Bash"
-    assert line["decision"] == "none"
-    assert line["misconfigured"] == "badValue"
+    assert line["decision"] == "deny"
+    assert line["warning"] == "noClassifier"
+
+
+# ---------------------------------------------------------------------------
+# Clef and the chain
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def run_chain(jev, clef, tmp_path):
+    """Both backends at their mocks, with GATE_LOG; returns (stdout, log lines)."""
+    log_path = tmp_path / "chain.log"
+
+    def go(stdin, env=None):
+        log_path.unlink(missing_ok=True)
+        base = {
+            "GATE_CLEF_URL": clef.url,
+            "TYPESAFE_API_KEY": "key-123",
+            "GATE_JEV_URL": jev.url,
+            "GATE_JEV_PROMPT": "cloud-change",
+            "GATE_LOG": str(log_path),
+        }
+        r = HookRunner.run(stdin, base, env or {})
+        return r.stdout, [json.loads(x) for x in log_path.read_text().splitlines()]
+
+    return go
+
+
+def test_clef_without_key_sends_no_authorization_header(clef, run_chain):
+    clef.answer(READ_ONLY)
+    run_chain(bash("git status"))
+    assert clef.hits == 1
+    assert "authorization" not in clef.headers[0]
+
+
+def test_clef_key_is_sent_as_bearer(clef, run_chain):
+    clef.answer(READ_ONLY)
+    run_chain(bash("git status"), {"GATE_CLEF_API_KEY": "clef-key"})
+    assert clef.headers[0]["authorization"] == "Bearer clef-key"
+
+
+def test_clef_request_uses_clef_model_and_settings(clef, run_chain):
+    clef.answer(READ_ONLY)
+    run_chain(bash("git status"), {"GATE_CLEF_MODEL": "clef-small"})
+    assert clef.bodies[0]["model"] == "clef-small"
+    assert list(clef.bodies[0]["questions"]) == ["cloud_change"]  # the shared prompt
+
+
+def test_clef_has_its_own_timeout(clef, jev, run_chain):
+    clef.answer(kind="hang")
+    jev.answer(RISKY)
+    started = time.monotonic()
+    stdout, [line] = run_chain(bash("ls"), {"GATE_CLEF_TIMEOUT_MS": "100"})
+    assert time.monotonic() - started < 5
+    assert reason(stdout) == "jev: destructive p=1.00 risk=1.00"
+    assert line["fallback"][0]["backend"] == "clef"
+    assert line["fallback"][0]["error"] == "timeout"
+
+
+def test_log_names_who_answered(clef, jev, run_chain):
+    clef.answer(READ_ONLY, usage={"input_tokens": 7})
+    _, [line] = run_chain(bash("git status"))
+    assert line["backend"] == "clef"
+    assert line["fallback"] == []
+    assert line["probabilities"] == READ_ONLY
+    assert line["usage"] == {"input_tokens": 7}
+    assert jev.hits == 0
+
+
+def test_log_lists_the_fallback(clef, jev, run_chain):
+    clef.answer(status=503)
+    jev.answer(READ_ONLY)
+    _, [line] = run_chain(bash("git status"))
+    assert line["backend"] == "jev"
+    [fallback] = line["fallback"]
+    assert fallback["backend"] == "clef"
+    assert fallback["error"] == "http 503"
+    assert isinstance(fallback["latencyMs"], int)
+    assert line["probabilities"] == READ_ONLY
+    assert isinstance(line["latencyMs"], int)
+
+
+def test_log_when_every_backend_is_down(clef, jev, run_chain):
+    clef.answer(status=503)
+    jev.answer(kind="malformed")
+    stdout, [line] = run_chain(bash("git status"))
+    assert reason(stdout) == "clef-unavailable: http 503; jev-unavailable: malformed answer"
+    assert line["backend"] is None
+    assert [(f["backend"], f["error"]) for f in line["fallback"]] == [("clef", "http 503"), ("jev", "malformed")]
+    assert line["warning"] == "malformed"
+    assert line["probabilities"] is None

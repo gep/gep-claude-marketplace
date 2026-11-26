@@ -16,7 +16,9 @@ from dg_testkit.pythons import Pythons
 GATE_SH = DG / "hooks" / "gate.sh"
 NO_PYTHON = "plugin-fault: no Python >= 3.14 found (set GATE_INFRA_PYTHON)"
 ENGINE_FAILED = "plugin-fault: internal error: engine exit 1"
-RAN = ""  # no key: the engine ran and said nothing, so the call is left to Claude Code
+# Defaults, no key: the engine ran; Clef is usable but no local Clef answers (tests point it at a closed
+# port), and Jev has no key, so the call asks.
+RAN = "clef-unavailable: network error"
 
 
 def _bin(tmp_path) -> FakeBin:
@@ -36,7 +38,7 @@ def _wrapper(fake: FakeBin, name: str, python: str, marker=None):
 
 
 def _run(fake: FakeBin, command="git push -f", cwd=None, **env) -> str:
-    """The hook's stdout, or the plugin-fault reason it asked with."""
+    """"" for no output, else the reason the hook asked with."""
     proc = subprocess.run(
         [shutil.which("bash"), str(GATE_SH)],
         input=HookRunner.bash_input(command, cwd or fake.path).encode(),
@@ -48,7 +50,7 @@ def _run(fake: FakeBin, command="git push -f", cwd=None, **env) -> str:
     assert proc.returncode == 0
     out = proc.stdout.decode()
     if not out:
-        return RAN
+        return ""
     decision = json.loads(out)["hookSpecificOutput"]
     assert decision["permissionDecision"] == "ask"
     return decision["permissionDecisionReason"]
