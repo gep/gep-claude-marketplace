@@ -1,6 +1,6 @@
 """Dry run for destructive-guard: what would the hook do with a call, and what is the effective
-configuration? Used by the `check` skill. Never runs the call; a call check sends the redacted call to
-Jev (one request).
+configuration? Used by the `check` skill. Never runs the call; a call check runs the hook's chain and sends the redacted call to
+Clef, then Jev if Clef does not answer (up to one request each).
 
     check.py [--json] -- <command...>       a Bash command
     check.py [--json] --mcp <tool> [<json input>]       an MCP call
@@ -32,7 +32,7 @@ class CheckCli:
             if a == "--json":
                 opts["json"] = True
             elif a == "--jev":
-                raise UsageError("--jev is no longer needed: a call check always asks Jev")
+                raise UsageError("--jev is no longer needed: a call check always runs the full chain")
             elif a == "--config":
                 opts["mode"] = "config"
             elif a == "--mcp":

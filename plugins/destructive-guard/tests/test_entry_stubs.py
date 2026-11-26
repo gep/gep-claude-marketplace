@@ -34,6 +34,6 @@ def test_314_imports_real_package(tmp_path, stub, args, stdout):
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr == ""
     if stdout is None:
-        assert "jev" in json.loads(proc.stdout)
+        assert "backends" in json.loads(proc.stdout)
     else:
         assert proc.stdout == stdout

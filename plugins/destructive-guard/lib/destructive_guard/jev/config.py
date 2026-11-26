@@ -67,7 +67,7 @@ class JevConfig:
     def read(cls, env: Mapping[str, str], *, cwd: str | Path | None = None) -> dict:
         """The Jev settings (adapter over backends.py: the Jev entry only, ignores GATE_JEV_ENABLED and Clef).
         Raises JevConfigError (with a `kind`, no backend label) when the key is missing or a value is invalid.
-        The hook uses `Backends.read`; session.py (C4) and check/dry_run.py (C5) still use this adapter."""
+        Production code (hook, session start, check) uses `Backends.read`; only the Jev unit tests and live helper use this adapter."""
         from .backends import JEV, BackendConfig, SharedSettings
 
         cwd = cwd if cwd is not None else os.getcwd()
