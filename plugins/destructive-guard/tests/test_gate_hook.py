@@ -62,7 +62,7 @@ def test_jev_down_asks_with_a_warning(run):
 def test_env_call_is_not_sent_and_warns(run, jev):
     r = run(HookRunner.bash_input("cat .env", HERE), RISKY)
     assert json.loads(r.stdout) == {
-        "systemMessage": "destructive-guard: call mentions a .env file and was not sent to Jev; Claude Code's permissions apply"
+        "systemMessage": "destructive-guard: call mentions a .env file and was not sent to a classifier; Claude Code's permissions apply"
     }
     assert jev.hits == 0
 

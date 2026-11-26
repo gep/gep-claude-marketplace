@@ -1,7 +1,7 @@
 {
   "name": "destructive-guard",
-  "version": "1.0.4",
-  "description": "Jev-only PreToolUse approval gate, configured through env variables. Sends each Bash and MCP call (redacted) to the Jev classifier and asks before risky ones, and asks with a warning when Jev cannot answer; never allows or denies. Blocks .env file access. A session warning says when it is not configured or GATE_LOG cannot be written. Includes a check skill and a Lean model of the gate. Needs Python >= 3.14.",
+  "version": "2.0.0",
+  "description": "PreToolUse approval gate with two classifiers, configured through env variables. Sends each Bash and MCP call (redacted) to Clef (typically served locally) and, when Clef cannot answer, to Jev, and asks before risky ones; asks with a warning when neither answers; never allows. With no usable classifier the session halts: Bash and MCP calls are denied and prompts are blocked until a setting is fixed or GATE_ENABLED=0. Blocks .env file access. A session warning names misconfigured settings. Includes a check skill and a Lean model of the gate. Needs Python >= 3.14.",
   "author": {
     "name": "Gep"
   },

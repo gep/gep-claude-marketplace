@@ -33,7 +33,7 @@ def test_ask_with_warning_bytes():
 def test_warning_only_bytes():
     out = HookOut("none", warning=Down.ENV_REFERENCE)
     assert out.to_json() == (
-        '{"systemMessage":"destructive-guard: call mentions a .env file and was not sent to Jev; '
+        '{"systemMessage":"destructive-guard: call mentions a .env file and was not sent to a classifier; '
         "Claude Code's permissions apply\"}"
     )
 

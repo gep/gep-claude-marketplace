@@ -112,7 +112,7 @@ class HookOut:
         if w is Down.NO_CLASSIFIER:
             return Halt.text([d])
         if w is Down.ENV_REFERENCE:
-            return "destructive-guard: call mentions a .env file and was not sent to Jev; Claude Code's permissions apply"
+            return "destructive-guard: call mentions a .env file and was not sent to a classifier; Claude Code's permissions apply"
         if w.jev_unavailable:
             failures = self.failures or (Failure("jev", w, d),)
             text = "; ".join(f.text for f in failures)
