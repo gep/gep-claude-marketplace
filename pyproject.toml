@@ -12,8 +12,11 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["plugins"]
-addopts = ["--import-mode=importlib", "-m", "not live_jev"]
-markers = ["live_jev: calls the real Jev service (needs TYPESAFE_API_KEY); run with -m live_jev"]
+addopts = ["--import-mode=importlib", "-m", "not live_jev and not live_clef"]
+markers = [
+  "live_jev: calls the real Jev service (needs TYPESAFE_API_KEY); run with -m live_jev",
+  "live_clef: calls a local Clef (GATE_CLEF_URL, skipped when unreachable); run with -m live_clef",
+]
 pythonpath = [
   "plugins/destructive-guard/lib",
   "plugins/destructive-guard/tests",
